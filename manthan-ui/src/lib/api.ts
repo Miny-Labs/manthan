@@ -5,24 +5,21 @@
  * header X-Manthan-Dev-Org until Clerk JWT verification is wired.
  */
 
-// `??` (not `||`) so an explicit empty string survives — in prod we set
-// VITE_MANTHAN_API_URL="" so fetches go to relative /api/* (same origin),
-// and Caddy reverse-proxies to the local API. With `||`, "" was falsy
-// and we fell back to localhost:8765 from the browser → CORS hellscape.
-// Default is ALWAYS same-origin (empty string -> relative fetches like
-// "/api/me"). This is what the production VPS needs (Caddy proxies
-// /api/* to FastAPI on the same host) and is also what `npm run dev`
-// needs (vite.config.ts has a server.proxy that forwards /api -> the
-// local FastAPI).
+// `??` (not `||`) so an explicit empty string survives. Default is
+// same-origin (empty string -> relative fetches like "/api/me"), which
+// is what `npm run dev` needs (vite.config.ts has a server.proxy that
+// forwards /api -> the local FastAPI).
+//
+// In the GCP deploy the UI's Caddy serves static files only and does
+// NOT proxy /api/* (see deploy/gcp/README.md): the API origin is baked
+// into the bundle at build time via
+// VITE_MANTHAN_API_URL=https://api.example.com npm run build
+// (deploy/gcp/Dockerfile.ui passes it as a build arg).
 //
 // We deliberately do NOT default to "http://127.0.0.1:8765" - that
-// path was a foot-gun: when .env.production was missing (it's
-// gitignored) the build picked localhost and shipped it to the
-// browser, breaking the deployed app with CORS errors.
-//
-// To override (e.g. a Vercel deploy where the API lives on a separate
-// origin), set VITE_MANTHAN_API_URL explicitly via .env.production or
-// VITE_MANTHAN_API_URL=https://api.example.com npm run build.
+// path was a foot-gun: when the env var was missing the build picked
+// localhost and shipped it to the browser, breaking the deployed app
+// with CORS errors.
 const API_URL =
   (import.meta.env.VITE_MANTHAN_API_URL as string | undefined) ?? "";
 
@@ -107,10 +104,9 @@ export interface ApiCase {
   card_summary?: string | null;
   /** Backwards-compat alias for `demo_mode === 'v2'`. */
   is_demo_v2?: boolean;
-  /** Which guided demo grafted seeded data onto this case:
-   *    'v2' - email demo, Maya Patel scenario
-   *    'v3' - Slack demo, Vermillion Studios scenario
-   *    null - real case */
+  /** Legacy seeded-data flag. The guided demo wizards that set this are
+   *  deleted; the field survives so old seeded cases still render
+   *  correctly. null/undefined for every real case. */
   demo_mode?: "v2" | "v3" | null;
 }
 
@@ -205,24 +201,8 @@ export async function getCase(caseId: string): Promise<ApiCase> {
   return call<ApiCase>(`/api/cases/${caseId}`);
 }
 
-export interface CreateCasePayload {
-  trigger_text: string;
-  case_type?: CaseType;
-  customer_ref?: string;
-  amount_minor?: number;
-  currency?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export async function createCase(payload: CreateCasePayload): Promise<ApiCase> {
-  return call<ApiCase>("/api/cases", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
 // ──────────────────────────────────────────────────────────────────────
-// Actions: approve / hold / chat / list
+// Actions: approve / hold / list
 // ──────────────────────────────────────────────────────────────────────
 
 export interface ApiActionRow {
@@ -282,17 +262,6 @@ export async function holdCase(caseId: string): Promise<void> {
   });
 }
 
-export async function chatWithCase(
-  caseId: string,
-  message: string,
-  intent: "question" | "edit_request" | "re_investigate" | "general" = "general",
-): Promise<{ queued: boolean }> {
-  return call(`/api/cases/${caseId}/chat`, {
-    method: "POST",
-    body: JSON.stringify({ message, intent }),
-  });
-}
-
 // ──────────────────────────────────────────────────────────────────────
 // Live investigation narrative - one paragraph + interim findings,
 // synthesized server-side by feeding the last 25 events to a fast LLM.
@@ -347,32 +316,6 @@ export async function listCitationReasonings(
   caseId: string,
 ): Promise<{ reasonings: CitationReasoning[] }> {
   return call(`/api/cases/${caseId}/citations`);
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Inbound email - for the "Original email" panel in the workspace.
-// 404s when the case wasn't opened via email; callers should treat that
-// as "no panel to show" rather than an error.
-// ──────────────────────────────────────────────────────────────────────
-
-export interface TriggerEmail {
-  from_addr: string;
-  from_name: string;
-  subject: string;
-  received_at: string;
-  message_id: string;
-  text: string;
-  html: string;
-}
-
-export async function fetchTriggerEmail(caseId: string): Promise<TriggerEmail | null> {
-  try {
-    return await call<TriggerEmail>(`/api/cases/${caseId}/trigger_email`);
-  } catch (e) {
-    // 404 means the case wasn't email-triggered.
-    if ((e as Error).message.includes("404")) return null;
-    throw e;
-  }
 }
 
 // ──────────────────────────────────────────────────────────────────────

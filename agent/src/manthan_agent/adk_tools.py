@@ -1,7 +1,7 @@
 """ADK tool factory for the Investigator agent.
 
-The custom loop's `tools.py` defined Pydantic-schema'd tools dispatched by a
-hand-rolled executor. Under ADK the agent calls plain Python functions and
+The retired hand-rolled loop defined Pydantic-schema'd tools dispatched by a
+custom executor. Under ADK the agent calls plain Python functions and
 ADK builds the Gemini function declarations from their signatures + Google-
 style docstrings. This module returns those functions as closures bound to a
 per-run `RunState` and the live Coral MCP session.
@@ -32,7 +32,7 @@ from google.adk.tools import ToolContext
 from .types import Brief, Decision, DraftedAction, Evidence, Finding
 
 # Schemas Coral exposes per source — used to tag which brand pill a query's
-# Evidence chip should show. Mirrors the set in the old tools.py.
+# Evidence chip should show. Carried over from the pre-ADK toolkit.
 _KNOWN_SOURCES: set[str] = {
     "stripe", "chargebee", "razorpay", "hubspot", "salesforce", "intercom",
     "zendesk", "slack", "notion", "confluence", "gmail", "postmark", "resend",

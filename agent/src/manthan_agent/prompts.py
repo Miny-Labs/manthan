@@ -1,16 +1,13 @@
-"""System + reflexion prompts for the Manthan investigator.
+"""The SYSTEM prompt for the Manthan investigator coordinator.
 
-Locked design: a SINGLE generalist agent, not a classifier-then-specialist
+Locked design: a generalist coordinator, not a classifier-then-specialist
 pipeline. The agent reasons about each case from first principles using
-its toolkit; we don't classify into a fixed Pattern enum.
+its toolkit (team.py extends this prompt with the specialist fan-out
+section); we don't classify into a fixed Pattern enum.
 
 The 11 dispute archetypes from research are mentioned in the system
 prompt as EXAMPLES that calibrate the agent's intuition - never as a
 classification dictionary.
-
-Two prompts here:
-  SYSTEM  - the persona, the toolkit overview, the output contract
-  REFLEXION - the every-3-steps self-check
 """
 
 from __future__ import annotations
@@ -715,42 +712,4 @@ Examples of cases you'll see (calibration, NOT classification):
 You're a senior analyst, not a chatbot. Read closely. Reason precisely.
 Cite everything. Pause when you should. The human reviews; they don't
 investigate.
-"""
-
-
-# ──────────────────────────────────────────────────────────────────────
-# REFLEXION - runs every ~3 ReAct steps as a self-check
-# ──────────────────────────────────────────────────────────────────────
-
-REFLEXION = """\
-You're at a Reflexion checkpoint partway through investigating a case.
-
-Look at:
-  - The case trigger
-  - The Evidence you've gathered so far
-  - The Findings you've recorded
-  - Your last few tool calls
-
-Answer one of:
-  CONVERGING  - Evidence is consistent, you're close to a decision.
-                Keep going.
-  GAP         - A specific question is unanswered. Name it and a query
-                that would answer it.
-  CONTRADICTION - Two pieces of Evidence disagree. Name them.
-  THIN_FINDINGS - You've completed >=1 coral_sql call but have <5
-                  record_finding entries. The data on your latest row
-                  has more to say. Walk the column groups (payment,
-                  subscription, CRM, support, policy, usage) and emit
-                  one Finding per group from the row you already have.
-                  Do NOT issue a new coral_sql until you've extracted
-                  everything from the existing row.
-  SATURATED   - Last 2 queries returned no new findings AND you have
-                >=5 findings. You have what you have. Move to conclude().
-  STUCK       - The case needs human direction. Call ask_human().
-
-Be brutal with yourself. If you're padding queries, say SATURATED.
-If you have a fat row but only 2 findings recorded, say THIN_FINDINGS
-and extract more - don't re-query. If the data doesn't support your
-tentative direction, say CONTRADICTION and rethink. The goal is the
-right answer, not a defensible one.
 """

@@ -231,7 +231,7 @@ async def grounded_answer(
             cfg,
             user=user,
             system=system,
-            model=model or cfg.model_triage,
+            model=model or cfg.model_subagent,
             temperature=0.2,
             max_output_tokens=512,
         )
@@ -321,7 +321,8 @@ async def insert_case_from_trigger(
             )
             case_id = case_row["id"]
 
-            # case_opened - the investigate worker reacts via LISTEN/NOTIFY.
+            # case_opened - audit-trail/UI event; nothing consumes it via
+            # NOTIFY anymore (the investigator continues the run in-process).
             data: dict[str, Any] = {
                 "case_id": str(case_id),
                 "short_id": sid,

@@ -8,30 +8,27 @@ A2A, Gemini Enterprise / Marketplace-ready).
 
 ---
 
-## 1. Architecture thesis — the seam that makes this safe
+## 1. Architecture thesis — seam-first, then native
 
-The existing worker consumes the agent through exactly one contract:
+**Where we are (present tense):** agents ARE the system. The investigator
+agent service (`manthan-api/src/manthan_api/agents/investigator.py`) consumes
+the `run_case()` Event stream **in-process** and writes its own events +
+projections through `services/case_store.py`. There is no investigate worker —
+it is DELETED; `workers/main.py` runs only the deterministic actor +
+prettifier. See §4b.
 
-```python
-# manthan-api/src/manthan_api/workers/investigate.py
-async for evt in run_case(trigger, cfg, store):   # yields manthan_agent.types.Event
-    await self._mirror_event(... evt ...)          # -> Postgres events/cases/findings/actions
-```
-
-So we **keep `run_case()`'s signature and `Event` stream identical** and swap
-only the internals from the custom loop to ADK. The worker, Postgres schema,
-every API router, the actor (real Stripe writes), policy engine, and the
-existing UI then need **zero changes** to keep working. New Track-3 surfaces
-(A2A, traces, observability UI) are added *on top*, not woven through.
-
-This is the single most important decision: blast radius = the `agent/` package
-+ additive infra. Everything downstream is preserved.
-
-> **Update (native spine):** the seam held and then moved — the worker is now
-> DELETED. The same `run_case()` Event stream is consumed in-process by the
-> investigator agent service (`manthan-api/src/manthan_api/agents/
-> investigator.py`), which writes the identical projections through
-> `services/case_store.py`. See §4b.
+**How we got here safely (history):** the port went seam-first. The legacy
+NOTIFY-mirror worker (`manthan-api/src/manthan_api/workers/investigate.py`,
+since deleted) consumed the agent through exactly one contract —
+`async for evt in run_case(trigger, cfg, store)` mirroring each
+`manthan_agent.types.Event` into Postgres. We kept `run_case()`'s signature
+and `Event` stream identical and swapped only the internals from the custom
+loop to ADK, so the Postgres schema, every API router, the actor (real Stripe
+writes), the policy engine, and the existing UI needed **zero changes** while
+the brain was replaced. Once the ADK spine was proven, the bolt-on was
+removed: the worker's mirror logic was extracted verbatim into
+`services/case_store.py` and the worker deleted. The seam held, then moved
+inside the agent.
 
 ---
 
@@ -43,8 +40,8 @@ All confirmed callable via `generativelanguage.googleapis.com` with
 | Role | Model | Why |
 |---|---|---|
 | Orchestrator / Investigator | `gemini-3.1-pro-preview` | deep multi-source reasoning, 1M ctx |
-| Sub-agents (actions, chat, prettifier) | `gemini-3-flash-preview` | fast, cheap, tool-capable |
-| Triage / event router | `gemini-3.1-flash-lite` | cheapest, classify-and-route |
+| Specialists · advisor · operator chat | `gemini-3.5-flash` | fast, cheap, tool-capable |
+| Triage router · event prettifier | `gemini-3.1-flash-lite` | cheapest tier |
 
 ADK owns the Investigator's model calls via `Agent(model=...)`. The
 `agent/src/manthan_agent/llm.py` helper (google-genai, AI Studio) serves the
@@ -76,16 +73,16 @@ remaining non-agent generations (prettifier, cross-case chat).
 | File | Action | Notes |
 |---|---|---|
 | `llm.py` | **DONE** — rewritten | OpenRouter → google-genai AI Studio helper |
-| `config.py` | **DONE** — Gemini fields added | `google_api_key`, 3 model tiers, `gemini_use_vertexai`; sources kept; OpenRouter optional |
+| `config.py` | **DONE** — Gemini fields added | `google_api_key`, 3 model tiers, `gemini_use_vertexai`; sources kept; OpenRouter removed entirely |
 | `pyproject.toml` | **DONE** | `openai` dropped; `google-adk>=2.2` + `google-genai>=2.8` added |
-| `loop.py` | **REPLACE** | custom ReAct loop → ADK Agent + Runner, wrapped by a new `run_case()` that yields the same `Event`s |
-| `tools.py` | **TRANSFORM** | 6 tools → ADK FunctionTools backed by Coral MCP; Evidence + integer citations live in ADK session state (preserves click-chip→source-row); version-tolerant catalog tool |
-| `pacer.py` | **TRANSFORM** | pure rules KEPT; wire as `before_model_callback` (R1–R6 nudges/halt) + `before_tool_callback` on `conclude` (C1 refund-math gate) |
-| `prompts.py` | **KEEP** (light edits) | SYSTEM/REFLEXION prompts port as the ADK agent instruction |
+| `loop.py` | **DONE** — replaced | custom ReAct loop → ADK Agent + Runner, wrapped by a `run_case()` that yields the same `Event`s |
+| `adk_tools.py` | **DONE** — new | ADK FunctionTools backed by Coral MCP; Evidence + integer citations live in ADK session state (preserves click-chip→source-row); version-tolerant catalog tool. (Plan said "transform `tools.py`"; what shipped was this new module — the legacy `tools.py` was deleted.) |
+| `team.py` + `agents.py` | **DONE** — new | coordinator + FIVE parallel in-process specialists sharing one Evidence set (payments_analyst, customer_context, reliability_analyst, policy_analyst = Notion SOP retrieval/RAG, network_rules_analyst = own agent with built-in `google_search` grounding); `ResilientAgentTool` 180s cap |
+| `pacer.py` + `adk_pacer.py` | **DONE** | pure rules kept; wired as `before_model_callback` (R1–R6 nudges/halt) + `before_tool_callback` on `conclude` (C1 refund-math gate) |
+| `prompts.py` | **DONE** — light edits | SYSTEM prompt ports as the ADK agent instruction (the old REFLEXION self-check belonged to the deleted loop and is gone) |
 | `types.py` | **KEEP** | `Event` already carries `trace_id`/`span_id`; all models reused |
-| `state.py` | **KEEP** | `EventStore` stays as the translation buffer the worker passes in |
+| `state.py` | **KEEP** | `EventStore` stays as the translation buffer the investigator agent service passes in |
 | `coral_session.py` | **KEEP** | `coral mcp-stdio` MCP client works as-is with 0.3.0 |
-| `agent.py` | **NEW** | ADK Agent definitions (investigator + later triage/actions) + callbacks |
 
 ### 4b. `manthan-api/` (the de-bolting: agents ARE the system)
 
@@ -121,7 +118,7 @@ FastAPI app + Cloud Run service + service account:
 | **Agent Roster** | **NEW** | per-agent identity, model, A2A card URL, signing fingerprint |
 | **Live Traces** | **NEW** | Cloud Trace span tree per case (tool calls, A2A hops, model calls) |
 | **Agent Controls** | **NEW** | HITL tier thresholds, model pin, kill switch, token budget |
-| `components/demo-v2/*`, `DemoTriggerMenu`, `ScenarioStory` | **DELETE** | demo wizards |
+| `components/demo-v2/*`, `DemoTriggerMenu`, `ScenarioStory` | **DELETED — done** | demo wizards removed (with the `_legacy/` pages, `HeroShowcase`, and the orphaned story/demo assets) |
 | blog/marketing-heavy pages | **TRIM** | optional; not core to Track 3 judging |
 
 ### 4d. Infra (additive, GCP-native)
@@ -144,7 +141,7 @@ FastAPI app + Cloud Run service + service account:
 1. **Foundation smoke** — `agent/scripts/smoke_adk.py` (genai + ADK tool + Coral). ✅ green.
 2. **Unit** — pacer rules (pure fns), citation index resolution, tool arg validation, version-tolerant catalog mapping.
 3. **Integration (real data)** — run the ported ADK agent against live local Coral on `du_1Tch1O…`; assert ≥5 cited findings, a Brief with decision + drafted actions, resolvable citations.
-4. **Contract** — drive `run_case()` through the real worker against a temp Postgres; assert events/cases/findings/actions rows land identically to today.
+4. **Contract** — drive `run_case()` the way its real consumer does (the investigator agent service writing through `services/case_store.py`) against a temp Postgres; assert events/cases/findings/actions rows land identically to today.
 5. **ADK eval** — synthetic dispute set scored on tool trajectory + brief quality (reliability metric for the submission).
 
 ---
@@ -160,10 +157,12 @@ FastAPI app + Cloud Run service + service account:
 | 5 | Preserve `run_case()` Event contract | ✅ done |
 | 6 | E2E test vs real seeded dispute | ✅ done |
 | 7 | A2A: expose all state as pickup-able skills | ✅ done |
-| 8 | Cloud Trace + logging | ✅ done — pending live verify (spans in Trace explorer after first deployed run) |
-| 9 | Stripe fan-out + triage | ✅ done — pending live verify (`stripe trigger` against a deployed webhook) |
+| 8 | Cloud Trace + logging | ✅ done — only the GCP-connection check remains (spans in Trace explorer after first deployed run) |
+| 9 | Stripe fan-out + triage | ✅ done — only the GCP-connection check remains (`stripe trigger` against a deployed webhook) |
 | 10 | Observability UI (identity/traces/controls) | ✅ done |
-| 11 | GCP deploy + secrets + evals + Marketplace | 🏗 scaffolded — `deploy/gcp/` (Dockerfiles, secrets/sql/deploy/pubsub scripts, runbook) + `docs/track3/SUBMISSION.md`; needs a real `PROJECT_ID` run + Producer Portal steps |
+| 11 | Native agent spine: triage/investigator/advisor macro agents; investigate worker deleted | ✅ done |
+| 12 | Parallel specialist split (`team.py`/`agents.py`: 5 specialists, Notion SOP RAG + google_search grounding) | ✅ done |
+| 13 | GCP deploy + secrets + evals + Marketplace | 🏗 scripted, awaiting GCP connection — `deploy/gcp/` (Dockerfiles, secrets/sql/deploy/pubsub scripts, runbook) + `docs/track3/SUBMISSION.md`; needs a real `PROJECT_ID` run + Producer Portal steps |
 
 ---
 

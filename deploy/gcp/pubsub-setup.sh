@@ -4,9 +4,10 @@
 #
 # DEFAULT ARCHITECTURE (no Pub/Sub needed):
 #   The API writes events to Postgres and pg_notify()'s the
-#   "manthan_event" channel; the single manthan-worker instance holds a
-#   LISTEN connection (manthan-api/src/manthan_api/workers/investigate.py).
-#   This is why deploy.sh pins the worker at min=max=1 instance.
+#   "manthan_event" channel; the single manthan-worker instance (the
+#   actor, manthan-api/src/manthan_api/workers/main.py) holds a LISTEN
+#   connection. This is why deploy.sh pins the worker at min=max=1
+#   instance.
 #
 # WHEN TO RUN THIS SCRIPT:
 #   Only when you need >1 worker instance (or cross-region fan-out).

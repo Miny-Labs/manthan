@@ -98,7 +98,8 @@ class CaseSnapshot:
     def looks_like_stripe_trigger(self) -> bool:
         """Trigger text mentions a charge/dispute id - i.e. we expect
         the agent to query stripe at some point. Used to avoid nudging
-        about stripe on non-stripe triggers (e.g. inbound email)."""
+        about stripe on non-stripe triggers (e.g. a free-form A2A
+        investigation request)."""
         t = (self.trigger_text or "").lower()
         return ("ch_" in t) or ("du_" in t) or ("stripe" in t)
 

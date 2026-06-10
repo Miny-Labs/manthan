@@ -1,3 +1,6 @@
+# DEMO DATA FIXTURE — KEPT DELIBERATELY. This script writes seed/patch
+# fixture data into the REAL demo SaaS accounts the live demo investigates.
+# Not part of the runtime agent; run manually when standing up a demo world.
 """Seed Stripe TEST MODE for the Manthan billing-dispute investigation agent.
 
 Creates real Stripe test-mode records: customers, products, prices,

@@ -1,3 +1,6 @@
+# DEMO DATA FIXTURE — KEPT DELIBERATELY. This script writes seed/patch
+# fixture data into the REAL demo SaaS accounts the live demo investigates.
+# Not part of the runtime agent; run manually when standing up a demo world.
 """Seed PostHog (project 442171, us.posthog.com) for the Manthan agent.
 
 Coral's PostHog source exposes analytics METADATA (insights, dashboards,

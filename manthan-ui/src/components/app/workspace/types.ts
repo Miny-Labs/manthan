@@ -1,9 +1,6 @@
 /**
  * Shared types for the Manthan case workspace.
  *
- * These mirror the data shapes used in HeroShowcase (the marketing
- * showcase) so the live product can use the SAME components.
- *
  * Adapter functions in lib/api.ts convert the raw ApiCase / ApiFinding
  * shapes to the workspace view-models below.
  */

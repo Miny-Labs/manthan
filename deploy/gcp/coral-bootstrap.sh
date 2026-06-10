@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────────────
 # coral-bootstrap.sh — register Coral data sources at container start.
 #
-# The investigate worker spawns `coral mcp-stdio` ITSELF per
+# The investigator agent service spawns `coral mcp-stdio` ITSELF per
 # investigation (agent coral_session), so this script does NOT start a
 # server. It only runs `coral source add <source>` for every source
 # whose required credentials are present in the environment (Cloud Run

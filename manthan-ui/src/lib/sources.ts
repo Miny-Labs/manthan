@@ -243,7 +243,7 @@ export const SOURCES: SourceMeta[] = [
     id: "resend",
     name: "Resend",
     category: "comms",
-    description: "Transactional + inbound email - Manthan's outbound rail",
+    description: "Transactional email - Manthan's outbound rail",
     simpleIcon: icon("Resend"),
     capabilities: ["write"],
     oauth: false,

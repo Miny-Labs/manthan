@@ -1,5 +1,7 @@
-# Root build context - keep this MINIMAL because the Coral source is
-# ~200MB without exclusions.
+# Root build context - keep this MINIMAL. NOTE: the GCP builds use the
+# per-image deploy/gcp/Dockerfile.{api,ui}.dockerignore files instead
+# (deploy.sh swaps them in); this root file exists to keep any ad-hoc
+# `gcloud builds submit` / `docker build` context small.
 
 # Always-junk
 .git
@@ -18,12 +20,6 @@
 # Node
 **/node_modules
 manthan-ui/dist
-
-# Rust build cache for Coral - we rebuild in the Docker stage
-coral/target
-coral/.git
-coral/CACHEDIR.TAG
-coral/tmp
 
 # Don't ship the UI source into the API container
 manthan-ui

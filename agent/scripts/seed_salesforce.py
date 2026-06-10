@@ -1,3 +1,6 @@
+# DEMO DATA FIXTURE — KEPT DELIBERATELY. This script writes seed/patch
+# fixture data into the REAL demo SaaS accounts the live demo investigates.
+# Not part of the runtime agent; run manually when standing up a demo world.
 """Seed Salesforce Dev Org with the 35-company directory + matching
 contacts, opportunities, and cases.
 

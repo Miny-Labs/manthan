@@ -20,7 +20,6 @@ dependencies = [
     "resend>=2.6",
     "slack-sdk>=3.33",
     "pyyaml>=6.0",
-    "reportlab>=4.2",
     # Bring the existing agent brain in as a library:
     "manthan-agent",
 ]

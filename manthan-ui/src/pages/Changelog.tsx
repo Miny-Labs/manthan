@@ -18,6 +18,25 @@ type Entry = {
 
 const ENTRIES: Entry[] = [
   {
+    date: "2026-06-10",
+    version: "v0.2.0",
+    headline:
+      "The native agent spine. Three A2A agents, parallel specialists, Gemini end-to-end, GCP-native.",
+    groups: {
+      Added: [
+        "Three A2A macro agents - triage (Stripe webhook intake + routing), investigator (owns the case, writes its own events), advisor (per-case Q&A, refund prechecks, dispute exposure) - each with its own agent card and service account.",
+        "Five parallel investigation specialists under the investigator coordinator: payments, customer context, reliability, policy (SOP retrieval over Notion), and network rules (Google Search grounding for Visa/Mastercard reason codes).",
+        "A2A skill catalog: investigate_dispute, ask, precheck_refund, get_customer_history, dispute_exposure, contribute_evidence, plus six state-query skills - any partner agent can delegate work or pick up every artifact.",
+        "Agent observability surfaces: /app/agents (roster + identity), /app/traces (span tree per case), /app/controls (HITL thresholds, model pin, kill switch).",
+      ],
+      Changed: [
+        "All reasoning now runs on Gemini (pro for the investigator, flash for specialists and the advisor, flash-lite for triage) via Google ADK.",
+        "Deployment is GCP-native: Cloud Run services per agent, Cloud SQL, Secret Manager, Cloud Trace; Agent Engine documented for the investigator.",
+        "The background investigate pipeline is gone - the investigator agent records its own events and projections; only the deterministic actor + prettifier workers remain.",
+      ],
+    },
+  },
+  {
     date: "2026-05-25",
     version: "v0.1.0",
     headline: "Manthan v1 closed beta. First design partners onboarding.",

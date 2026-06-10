@@ -1,3 +1,6 @@
+# DEMO DATA FIXTURE — KEPT DELIBERATELY. This script writes seed/patch
+# fixture data into the REAL demo SaaS accounts the live demo investigates.
+# Not part of the runtime agent; run manually when standing up a demo world.
 """Seed Slack workspace ``ManthanDemo`` for the Manthan billing-dispute agent.
 
 Coral surface limitation

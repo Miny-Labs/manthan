@@ -188,8 +188,9 @@ for pair in \
 done
 
 # Coral source credentials — coral-{tenant}-{var-lowercased-hyphens}.
-# The worker spawns the coral binary, so it needs these in its env; the
-# API gets them too (cross-case chat / future triage spawn coral as well).
+# The investigator agent spawns `coral mcp-stdio` per investigation, so
+# it needs these in its env; the worker (coral-bootstrap source
+# registration) and the API (/api/sources status) get the same set.
 for pair in \
     "STRIPE_API_KEY=coral-${TENANT}-stripe-api-key" \
     "HUBSPOT_ACCESS_TOKEN=coral-${TENANT}-hubspot-access-token" \

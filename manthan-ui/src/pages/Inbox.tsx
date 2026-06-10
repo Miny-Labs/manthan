@@ -719,8 +719,8 @@ function humanCount(n: number): string {
 // ──────────────────────────────────────────────────────────────────────
 // Empty state - the morning-quiet hero. No CTA panel: the desk sits
 // empty, the Manthan mark is the only sign of life, and one mono line
-// says what's true - cases arrive when a real trigger (Stripe webhook,
-// inbound email, Slack mention) fires.
+// says what's true - cases arrive when a real trigger (Stripe webhook
+// or an A2A investigate_dispute call) fires.
 // ──────────────────────────────────────────────────────────────────────
 
 function InboxEmptyState() {

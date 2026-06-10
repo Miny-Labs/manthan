@@ -15,7 +15,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 from typing import Any
 from uuid import UUID
 
@@ -191,26 +190,6 @@ class ActorWorker:
             )
             log.info("action %s fired: %s", kind, result.summary)
 
-            # Mirror to Slack thread if this case was opened from Slack - close
-            # the loop visually for Segment 4's "see actions firing in source".
-            try:
-                from manthan_api.services.slack_notifier import maybe_notify
-                await maybe_notify(
-                    org_id=org_id,
-                    thread_id=await self._thread_id_for_case(case_id),
-                    case_id=case_id,
-                    event_type="agent_reply",
-                    event_data={
-                        "text": (
-                            f":zap: *{kind}* executed - {result.summary}"
-                            + (f"\n<{_source_ref_url(kind, result.external_ref)}|View in source ↗>"
-                               if _source_ref_url(kind, result.external_ref) else "")
-                        ),
-                    },
-                )
-            except Exception as e:  # noqa: BLE001
-                log.warning("slack notify on action_executed failed: %s", e)
-
             # Optional verify pass.
             if verifier:
                 try:
@@ -363,14 +342,6 @@ class ActorWorker:
                 external_ref, action_id,
             )
 
-    async def _thread_id_for_case(self, case_id: UUID) -> UUID | None:
-        """Look up thread_id for a case - used by Slack mirror."""
-        async with get_pool().acquire() as conn:
-            return await conn.fetchval(
-                "SELECT thread_id FROM cases WHERE id = $1",
-                case_id,
-            )
-
     async def _finalize_sweep(self) -> int:
         """Look for any case stuck in 'acting' / 'awaiting_approval' where
         every action is terminal, and finalize each one. Called once on
@@ -489,17 +460,6 @@ class ActorWorker:
 
         log.info("case %s finalized: %s", case_id, reason)
 
-        # Fire the Slack actions-performed card. Outside the tx, since
-        # it talks to slack.com and we don't want a slow network hop to
-        # hold a DB transaction.
-        try:
-            from manthan_api.services.slack_notifier import (
-                maybe_notify_case_closed_card,
-            )
-            await maybe_notify_case_closed_card(org_id=org_id, case_id=case_id)
-        except Exception as e:  # noqa: BLE001
-            log.warning("slack close-card post failed: %s", e)
-
     async def _append_event(
         self,
         org_id: UUID,
@@ -535,30 +495,6 @@ class ActorWorker:
                     if attempt == 4:
                         raise
                     await asyncio.sleep(0.02 * (attempt + 1))
-
-
-def _source_ref_url(kind: str, external_ref: str | None) -> str | None:
-    """Build a deep-link URL for the executed action's external ref so the
-    Slack thread reply gets a 'View in source ↗' link."""
-    if not external_ref:
-        return None
-    if kind == "stripe_refund":
-        return f"https://dashboard.stripe.com/test/refunds/{external_ref}"
-    if kind == "stripe_dispute_response":
-        return f"https://dashboard.stripe.com/test/disputes/{external_ref}"
-    if kind == "customer_email":
-        return None  # Resend email IDs aren't user-clickable
-    if kind == "notion_decision_log":
-        clean = external_ref.replace("-", "")
-        return f"https://www.notion.so/{clean}"
-    if kind == "slack_brief":
-        # external_ref is the message ts; no clean permalink without channel
-        return None
-    if kind == "hubspot_note":
-        portal = os.environ.get("HUBSPOT_PORTAL_ID")
-        if portal:
-            return f"https://app.hubspot.com/contacts/{portal}/note/{external_ref}"
-    return None
 
 
 async def main() -> None:

@@ -13,7 +13,7 @@ Wire flow
 ─────────
 1. Replay: emit one `cases` event with the current list immediately.
 2. Subscribe to `manthan_event` NOTIFY channel (same one used by the
-   per-case stream and the investigate worker).
+   per-case stream).
 3. On each notification matching this org, set a dirty flag.
 4. A debounce coroutine wakes every ~1s. If dirty, refetch the cases
    list and emit a fresh `cases` event.

@@ -27,13 +27,13 @@ export default function Packs({ pack }: PackPageProps) {
 const BILLING_FLOW = [
   {
     n: "01",
-    name: "Inbound - customer emails support@",
+    name: "Trigger - Stripe webhook lands on the triage agent",
     detail:
-      "Resend webhook delivers the parsed message. Manthan opens a case keyed to the sender's address, writes a Manthan-branded acknowledgement, and tells the customer when they'll hear back.",
+      "Stripe delivers the dispute, refund, or fraud-warning event (five event types). The triage agent resolves your org, opens a case, and dispatches the investigator agent over A2A.",
   },
   {
     n: "02",
-    name: "Investigation - eleven sources, one pass",
+    name: "Investigation - nine sources, one pass",
     detail:
       "Manthan reads the Stripe charge + dispute, the original contract in Notion, daily active usage in PostHog, the support ticket history in Intercom, and the NPS history in HubSpot. Every claim ends with a clickable citation.",
   },
@@ -59,28 +59,24 @@ const BILLING_FLOW = [
     n: "06",
     name: "Close - case resolved, receipts attached",
     detail:
-      "Case flips to resolved with timestamps + external refs on every action. The customer's reply to your email routes back to the same case automatically.",
+      "Case flips to resolved with timestamps + external refs on every action. The full event log stays queryable, and the advisor agent answers follow-up questions on the case over A2A or per-case chat.",
   },
 ];
 
-// Triggers - ordered so the email path the demo shows is at the top.
+// Triggers - the Stripe webhook path the demo shows is at the top.
 const BILLING_TRIGGERS = [
   {
-    label: "Inbound email to support@",
-    sub: "The flagship surface. Resend webhook → case opened with the customer's email as the key.",
+    label: "Stripe webhook",
+    sub: "The flagship surface. charge.dispute.created, charge.dispute.updated, charge.dispute.closed, charge.refund.updated, radar.early_fraud_warning.created → triage agent opens the case.",
     primary: true,
   },
   {
-    label: "Stripe webhook",
-    sub: "charge.dispute.created, charge.refund.updated, radar.early_fraud_warning.created",
-  },
-  {
-    label: "Slack @manthan mention",
-    sub: "Triage in #cs-escalations. Manthan posts the brief in-thread and asks for the nod.",
+    label: "A2A investigate_dispute",
+    sub: "Any partner agent can delegate an investigation via the A2A card at /.well-known/agent-card.json.",
   },
   {
     label: "Manual case open",
-    sub: "Web UI '+ New case' or POST /api/cases with a trigger_text.",
+    sub: "POST /api/cases with a trigger_text.",
   },
 ];
 
@@ -92,8 +88,6 @@ const BILLING_SOURCES = [
   "intercom",
   "hubspot",
   "posthog",
-  "salesforce",
-  "zendesk",
   "slack",
   "sentry",
   "datadog",
@@ -162,7 +156,7 @@ function BillingPack() {
               className="font-display italic mx-1"
               style={{ color: "var(--color-ink-strong)" }}
             >
-              email → Stripe dispute → resolve → email
+              Stripe dispute → investigate → resolve
             </em>
             loop. Source code lives in your git repo under{" "}
             <code
@@ -351,35 +345,5 @@ function RenewalsPack() {
         </p>
       </Section>
     </PageBody>
-  );
-}
-
-function Lines({ rows }: { rows: { name: string; detail: string }[] }) {
-  return (
-    <ul
-      className="divide-y border-t border-b"
-      style={{ borderColor: "var(--color-rule-soft)" }}
-    >
-      {rows.map((r) => (
-        <li
-          key={r.name}
-          className="py-3"
-          style={{ borderColor: "var(--color-rule-soft)" }}
-        >
-          <div
-            className="text-[13.5px]"
-            style={{ color: "var(--color-ink-strong)" }}
-          >
-            {r.name}
-          </div>
-          <div
-            className="text-[12px] mt-0.5 leading-relaxed"
-            style={{ color: "var(--color-ink-muted)" }}
-          >
-            {r.detail}
-          </div>
-        </li>
-      ))}
-    </ul>
   );
 }

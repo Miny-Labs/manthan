@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     # ── LLM + Coral ──
     # Gemini via AI Studio (GOOGLE_API_KEY auth; GOOGLE_GENAI_USE_VERTEXAI=FALSE).
     google_api_key: str | None = Field(None, alias="GOOGLE_API_KEY")
-    openrouter_api_key: str | None = Field(None, alias="OPENROUTER_API_KEY")
     coral_binary: str = Field(
         "/Users/akshmnd/Dev Projects/coral/target/release/coral",
         alias="CORAL_BINARY",
@@ -47,7 +46,6 @@ class Settings(BaseSettings):
     # ── Webhook secrets ──
     stripe_webhook_secret: str | None = Field(None, alias="STRIPE_WEBHOOK_SECRET")
     slack_signing_secret: str | None = Field(None, alias="SLACK_SIGNING_SECRET")
-    resend_inbound_webhook_secret: str | None = Field(None, alias="RESEND_INBOUND_WEBHOOK_SECRET")
 
     # ── Web ──
     web_app_origin: str = Field("http://localhost:5173", alias="WEB_APP_ORIGIN")

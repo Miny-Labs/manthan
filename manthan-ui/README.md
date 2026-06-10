@@ -20,13 +20,16 @@ operator hits Approve.
 
 | Path | What renders |
 |---|---|
-| `/` | Landing page (marketing surface, the demo CTA) |
+| `/` | Landing page (marketing surface) |
 | `/login` | Clerk-hosted sign-in |
-| `/app` | Inbox + the empty-state hero with the three demo cards (Stripe Chargeback / Customer Email / Slack Thread) |
+| `/app` | Inbox; the empty state is the "Inbox Zero" insignia hero - cases arrive when a real trigger (Stripe webhook or A2A `investigate_dispute`) fires |
 | `/app/case/:id` | The case workspace - InvestigationMemo while the agent runs, WorkspaceMemo for the brief and approve flow, the actions cinematic on approve, the Closed Brief on resolve |
 | `/app/done` | Resolved case history |
 | `/app/policies` | Policy rules (auto-fire conditions) |
 | `/app/sources` | Connected source list (Coral catalog) |
+| `/app/agents` | Agent roster - per-agent identity, model, A2A card |
+| `/app/traces` | Live traces - span tree per case |
+| `/app/controls` | Agent controls - HITL thresholds, model pin, kill switch |
 | `/app/audit` | Per-case audit log |
 | `/app/settings` | Workspace settings |
 | `/blog/:slug` | Editorial posts (Captain's Log style) |
@@ -36,8 +39,6 @@ operator hits Approve.
 
 | Component | What it renders |
 |---|---|
-| `ScenarioStory` (overlay) | The 6-slide painterly story that walks before each demo - frames the case, the stakes, the systems involved, the old way, and how Manthan attacks it. Three stories shipped: aperture (Stripe), maya (email), vermillion (Slack). |
-| `DemoV2Wizard` / `DemoV3SlackWizard` | The guided "do it yourself" tours for the email + slack demos. Mounted by AppShell when `?demo=v2`/`v3` is in the URL or when there's saved-state in localStorage. |
 | `InvestigationMemo` | Renders the live agent run - tool calls coming in over SSE, prettified into a rolling narrative ("Manthan is asking Stripe…"), with the raw Coral SQL feed available in the right-rail toggle. |
 | `WorkspaceMemo` | The settled-brief surface: TL;DR, decision recommendation, suggested actions with the Approve · Execute / Hold / Deny / Escalate verdicts, citation chips wired to each source. |
 | `ApprovalCinematic` | The full-screen takeover after Approve. One action at a time, MIN_DWELL_MS per action, real status from SSE. |
@@ -87,16 +88,8 @@ npm run build        # Production build to dist/
 npm run typecheck    # tsc --noEmit
 ```
 
-Production deploy is a `npm run build` + `rsync dist/` to the VPS;
-Caddy serves the static files alongside the API. See
-[`../DEPLOY.md`](../DEPLOY.md) for the full path.
-
-## Story illustrations
-
-The `public/story/{scenario}/` directories hold the 5-6 painterly
-illustrations each demo story uses. They were generated via the
-Gemini Flash Image model (see [`../scripts/gen_story_images.py`](../scripts/gen_story_images.py))
-and optimized to WebP at quality 78 to land in the 20-130 KB range.
-The script is idempotent - re-running skips files that already
-exist - so adding a new story is: drop scene prompts into the SCENES
-dict, run the script, the new images land in `public/story/<name>/`.
+Production deploy is GCP-native: `deploy/gcp/Dockerfile.ui` runs
+`npm run build` with the API origin baked into the bundle via the
+`VITE_MANTHAN_API_URL` build arg, then serves `dist/` with Caddy
+(static files only - no /api proxy). See
+[`../deploy/gcp/README.md`](../deploy/gcp/README.md) for the full path.

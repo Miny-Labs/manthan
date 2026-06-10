@@ -1,4 +1,14 @@
-"""FastAPI app entry point - `uvicorn manthan_api.main:app`."""
+"""FastAPI gateway - `uvicorn manthan_api.main:app`.
+
+The merchant-facing HTTP surface: the UI API (cases/events/actions/
+policy/audit/sources, JSON + SSE), the Clerk + Stripe webhooks, and the
+root A2A gateway (aggregate agent card at /.well-known/agent-card.json
++ JSON-RPC /a2a, which routes to the advisor's skill set).
+
+The agents themselves are separate apps - see `manthan_api.agents`
+(triage / investigator / advisor); the deterministic actor + prettifier
+workers live in `manthan_api.workers` (entrypoint `workers.main`).
+"""
 
 from __future__ import annotations
 
@@ -10,8 +20,8 @@ from typing import AsyncIterator
 # Load env from BOTH manthan-api/.env and the sibling agent/.env. The
 # /api/sources endpoint reads source credentials directly from the
 # environment (STRIPE_API_KEY, NOTION_API_KEY, etc.) and those live in
-# agent/.env. Without this, "0 live · 11 available" on the Sources page
-# even when everything is configured.
+# agent/.env. Without this, the Sources page shows everything as merely
+# "available" even when it is configured.
 from dotenv import load_dotenv
 _ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(_ROOT / "manthan-api" / ".env")

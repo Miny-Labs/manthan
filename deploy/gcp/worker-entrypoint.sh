@@ -2,9 +2,10 @@
 # ──────────────────────────────────────────────────────────────────────
 # worker-entrypoint.sh — Cloud Run command override for manthan-worker.
 #
-# The investigate worker is a PG LISTEN/NOTIFY consumer with no HTTP
-# server, but Cloud Run *services* require the container to listen on
-# $PORT to pass the startup probe. So this script:
+# The deterministic worker process (actor + prettifier) is a PG
+# LISTEN/NOTIFY + polling consumer with no HTTP server, but Cloud Run
+# *services* require the container to listen on $PORT to pass the
+# startup probe. So this script:
 #
 #   1. registers Coral sources (coral-bootstrap.sh — never fails the boot),
 #   2. starts a tiny stdlib HTTP listener on $PORT from an EMPTY dir

@@ -9,6 +9,44 @@ This file maps each judging criterion to what exists in the repo. Items
 marked `TODO` are the remaining human steps (mostly portal clicks and
 live runs) — the code/scripts behind them are already in place.
 
+## 0. The system in one paragraph (current architecture)
+
+Three A2A macro agents are the system
+(`manthan-api/src/manthan_api/agents/`): **triage**
+(`gemini-3.1-flash-lite`) takes the Stripe webhook (5 event types),
+resolves the org, and dispatches the **investigator**
+(`gemini-3.1-pro-preview`) over A2A (with an in-process fallback for
+local dev). The investigator creates the case and runs the ADK
+investigation in-process — a coordinator fanning out FIVE parallel
+specialists over one shared Evidence set (payments, customer context,
+reliability, policy = Notion SOP retrieval/RAG, network rules = its own
+agent with built-in `google_search` grounding) — and writes its own
+events and projections through `services/case_store.py`. The **advisor**
+(`gemini-3.5-flash`) is the conversational A2A face (`ask`,
+`precheck_refund`, `get_customer_history`, `dispute_exposure`,
+`contribute_evidence` + 6 reads) and answers per-case operator chat.
+Drafted actions pass the HITL policy gates (auto under $50 / one-click
+$50–500 / two-person $500+) before the deterministic actor executes;
+`workers/main.py` runs only the actor + prettifier. Coral is the
+grounding plane over nine live SaaS schemas (stdio locally, a 0.4.2
+streamable-HTTP sidecar on GCP), and every claim carries a clickable
+citation back to the source row.
+
+**Live-run proof points** (local end-to-end run against the seeded
+$8,400 `product_not_received` dispute `du_1Tch1OCNe0SBMhzIAppAdJjT`):
+
+- All **five specialists ran in parallel** under the coordinator and
+  contributed to a single shared Evidence set — the brief's citations
+  span payments, CRM/support, reliability, the Notion SOP, and
+  Google-Search-grounded network rules.
+- The **pacer's C1 refund-math gate rejected a math-less `conclude` on
+  camera**: the coordinator first tried to conclude without showing the
+  refund arithmetic, the `before_tool_callback` bounced it, and the
+  next attempt carried the worked-out math.
+- The final brief recommended a **$560 partial refund at 0.95
+  confidence** on the $8,400 dispute — drafted, policy-gated (two-person
+  tier), and never auto-executed.
+
 ---
 
 ## 1. ADK agent (the brain)
@@ -19,17 +57,22 @@ SQL data plane (MCP) to investigate billing disputes end-to-end.
 | Piece | File |
 |---|---|
 | ADK Agent + Runner wrapped in the legacy-compatible `run_case()` event stream | `agent/src/manthan_agent/loop.py` |
+| Coordinator + FIVE parallel in-process specialists (payments_analyst, customer_context, reliability_analyst, policy_analyst = Notion SOP RAG, network_rules_analyst = `google_search` grounding), `ResilientAgentTool` 180s cap | `agent/src/manthan_agent/team.py` |
+| ADK agent definitions / model wiring for the team | `agent/src/manthan_agent/agents.py` |
 | ADK FunctionTools over Coral MCP (evidence + integer citations in session state) | `agent/src/manthan_agent/adk_tools.py` |
 | Pacing/guard rules as ADK callbacks (`before_model` nudges R1–R6, `before_tool` refund-math gate C1) | `agent/src/manthan_agent/adk_pacer.py` (pure rules: `pacer.py`) |
-| Agent instruction (SYSTEM/REFLEXION prompts) | `agent/src/manthan_agent/prompts.py` |
+| Agent instruction (SYSTEM prompt) | `agent/src/manthan_agent/prompts.py` |
 | Typed event/finding/brief models (incl. `trace_id`/`span_id` on `Event`) | `agent/src/manthan_agent/types.py` |
 | Coral `mcp-stdio` session management | `agent/src/manthan_agent/coral_session.py` |
 | Stripe-event triage (pure function `trigger_from_stripe_event`) | `agent/src/manthan_agent/triage.py` (tests: `agent/tests/test_triage.py`, fan-out: `manthan-api/tests/test_stripe_fanout.py`) |
 
-**The seam:** `manthan-api/src/manthan_api/workers/investigate.py` consumes
-the agent solely via `async for evt in run_case(trigger, cfg, store)` —
-the ADK port changed the internals, not the contract (worker file is
-byte-identical to pre-port).
+**The seam:** the investigator agent service
+(`manthan-api/src/manthan_api/agents/investigator.py`) consumes the agent
+solely via `async for evt in run_case(trigger, cfg, store)` — run
+in-process, with every Event written to Postgres through
+`services/case_store.py`. The ADK port changed the internals, not the
+contract; once proven, the legacy NOTIFY-mirror worker was deleted and
+its mirror logic moved verbatim into `case_store.py`.
 
 ## 2. A2A — card + skills
 
@@ -41,19 +84,26 @@ byte-identical to pre-port).
 | FastAPI mounting: card at `/.well-known/agent-card.json`, RPC at `POST /a2a` | `manthan-api/src/manthan_api/api/a2a.py` (store: `services/a2a_store.py`, tests: `manthan-api/tests/test_a2a_router.py`) |
 | Tests (pure-logic) | `agent/tests/test_a2a.py` |
 
-**Skills:** one action — `investigate_dispute` — plus six state queries
-(`get_case`, `list_cases`, `get_brief`, `get_findings`, `get_actions`,
-`get_audit_trail`), so a partner agent can both *delegate* an
-investigation and *pick up* every artifact it produced.
-`A2A_PUBLIC_URL` is stamped into the card by `deploy/gcp/deploy.sh`.
+**Skills:** the action skill `investigate_dispute`, the advisor skills
+`ask` (grounded, cited NL answer over a case), `precheck_refund`,
+`get_customer_history`, `dispute_exposure`, and `contribute_evidence`
+(external agents push evidence into an open case), plus six state
+queries (`get_case`, `list_cases`, `get_brief`, `get_findings`,
+`get_actions`, `get_audit_trail`) — so a partner agent can *delegate* an
+investigation, *consult* it mid-flight, and *pick up* every artifact it
+produced. Each macro agent (triage / investigator / advisor) publishes
+its own card; the gateway card at `/.well-known/agent-card.json`
+aggregates them. `A2A_PUBLIC_URL` is stamped into the card by
+`deploy/gcp/deploy.sh`.
 
 ## 3. Gemini 3 via AI Studio
 
 | Role | Model |
 |---|---|
 | Orchestrator / investigator | `gemini-3.1-pro-preview` |
-| Sub-agents (actions, prettifier, chat) | `gemini-3.5-flash` |
-| Triage / event router | `gemini-3.1-flash-lite` |
+| Specialists · advisor · operator chat | `gemini-3.5-flash` |
+| Triage router · event prettifier | `gemini-3.1-flash-lite` |
+| Action execution (the actor) | deterministic — no model |
 
 Auth: plain `GOOGLE_API_KEY` (AI Studio,
 `GOOGLE_GENAI_USE_VERTEXAI=FALSE`) — no Vertex dependency. Config fields
@@ -67,8 +117,9 @@ Manager (`manthan-{tenant}-gemini-api-key`).
 - Trace wiring: `agent/src/manthan_agent/tracing.py`
   (tests: `agent/tests/test_tracing.py`); `Event` carries
   `trace_id`/`span_id` (`agent/src/manthan_agent/types.py`), emitted
-  through `run_case()` and mirrored to Postgres by the worker, so every
-  UI event row is joinable to a trace.
+  through `run_case()` and written to Postgres by the investigator agent
+  itself (`services/case_store.py`), so every UI event row is joinable
+  to a trace.
 - Observability UI (routed in `manthan-ui/src/AppRouter.tsx`):
   `manthan-ui/src/pages/AgentRoster.tsx` (per-agent identity/model/card,
   card fetch via `src/lib/agentCard.ts`), `AgentTraces.tsx` (span tree
@@ -101,17 +152,22 @@ Manager (`manthan-{tenant}-gemini-api-key`).
 
 Layered, per PLAN.md §5:
 
-1. Pure-logic unit suites (no network, no LLM — 60 passing):
+1. Pure-logic unit suites (no network, no LLM — 150 passing: 79 in
+   `agent/tests`, 71 in `manthan-api/tests`):
    `agent/tests/test_pacer.py`, `test_pacer_callbacks.py`,
    `test_adk_tools.py`, `test_a2a.py`, `test_tracing.py`,
-   `test_triage.py` —
+   `test_triage.py`, the team/specialist suites —
    `cd agent && PYTHONPATH=src .venv/bin/python -m pytest tests -q` —
-   plus `manthan-api/tests/` (a2a router, stripe fan-out).
+   plus `manthan-api/tests/` (a2a router, stripe fan-out, agent apps).
 2. Integration against live local Coral + the seeded dispute
    `du_1Tch1OCNe0SBMhzIAppAdJjT` ($8,400, product_not_received):
    ≥5 cited findings, decision + drafted actions, resolvable citations.
-3. Contract test: drive `run_case()` through the real worker against a
-   temp Postgres; assert identical events/cases/findings/actions rows.
+   Latest run: 5 specialists in parallel, C1 rejected a math-less
+   `conclude`, final brief = $560 refund at 0.95 confidence (see §0).
+3. Contract test: drive `run_case()` the way its real consumer does —
+   the investigator agent service writing through
+   `services/case_store.py` — against a temp Postgres; assert identical
+   events/cases/findings/actions rows.
 4. ADK eval set: synthetic disputes scored on
    `tool_trajectory_avg_score` + brief quality.
    `TODO`: commit the eval set under `agent/evals/` and record baseline

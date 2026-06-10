@@ -21,9 +21,10 @@ dispute, then joined HubSpot and Intercom looking for matching
 records." The per-event prettifier still runs alongside for the Coral
 trace surface.
 
-Model: inception/mercury-2 by default (set via MANTHAN_NARRATIVE_MODEL).
-Mercury is a reasoning model - we suppress its reasoning trace and
-raise the token budget so it has room to think internally then write.
+Model: gemini-3.1-flash-lite via AI Studio (GOOGLE_API_KEY) by default;
+override with MANTHAN_NARRATIVE_MODEL. Same `manthan_agent.llm` helper
+the prettifier uses - this endpoint sends 25-event windows and needs a
+cheap model that starts writing immediately.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ import os
 from typing import Any
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -45,15 +45,8 @@ logger = logging.getLogger("manthan_api.narrative")
 
 router = APIRouter(prefix="/api/cases", tags=["narrative"])
 
-# Default to gemini-3.1-flash-lite for the narrative call. Mercury was
-# the first pick (per user) but it's a reasoning model and even with
-# `reasoning.exclude=true` it spends the FULL token budget on internal
-# reasoning before writing - at the larger context this endpoint feeds
-# it, mercury hits finish_reason=length with empty content. The
-# prettifier (small, single-event prompts) tolerates this with a 256
-# budget; this endpoint sends 25-event windows and needs a model that
-# starts writing immediately.
-MODEL = os.environ.get("MANTHAN_NARRATIVE_MODEL", "google/gemini-3.1-flash-lite")
+# Cheap, fast tier (matches cfg.model_triage / the prettifier's pick).
+MODEL = os.environ.get("MANTHAN_NARRATIVE_MODEL", "gemini-3.1-flash-lite")
 WINDOW = 25  # events back from the latest
 
 # In-memory cache so repeated polls within 5 seconds for the same
@@ -105,11 +98,16 @@ async def get_narrative(
     case_id: UUID,
     ctx: TenantCtx = Depends(get_ctx),
 ) -> NarrativeResponse:
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
+    # Lazy import keeps module import light; module-attribute access keeps
+    # monkeypatching of manthan_agent.llm effective in tests.
+    from manthan_agent import config as agent_config
+    from manthan_agent import llm as agent_llm
+
+    cfg = agent_config.load()
+    if not cfg.google_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OPENROUTER_API_KEY not configured",
+            detail="GOOGLE_API_KEY not configured",
         )
 
     # Pull events from the thread.
@@ -196,46 +194,23 @@ async def get_narrative(
 
     user_msg = "\n".join(lines)
 
-    is_reasoning = any(x in MODEL for x in ("mercury", "o3", "o1", "gpt-5"))
-    payload: dict[str, Any] = {
-        "model": MODEL,
-        "max_tokens": 800 if is_reasoning else 400,
-        "temperature": 0.3,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-    }
-    if is_reasoning:
-        payload["reasoning"] = {"exclude": True}
-
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as http:
-            r = await http.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://app.manthan.quest",
-                    "X-Title": "Manthan investigation narrative",
-                },
-                json=payload,
-            )
-            r.raise_for_status()
-            body = r.json()
-    except httpx.HTTPError as e:
+        content = await agent_llm.agenerate_text(
+            cfg,
+            user=user_msg,
+            system=SYSTEM_PROMPT,
+            model=MODEL,
+            temperature=0.3,
+            max_output_tokens=400,
+        )
+    except Exception as e:  # noqa: BLE001
         logger.exception("narrative LLM call failed: %s", e)
         raise HTTPException(
             status_code=502,
             detail=f"LLM call failed: {type(e).__name__}",
         )
 
-    content = (
-        ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-        or ""
-    )
-
-    # Mercury sometimes wraps in markdown fences; strip them if so.
+    # Models sometimes wrap JSON in markdown fences; strip them if so.
     content = content.strip()
     if content.startswith("```"):
         content = content.strip("`")

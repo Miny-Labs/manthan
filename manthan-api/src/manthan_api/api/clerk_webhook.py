@@ -13,8 +13,8 @@ Why a webhook (and not just calling send_welcome from a UI action):
        key on clerk_user_id), so Clerk redelivery is safe.
     3. The UI doesn't need to know about emails - auth code stays clean.
 
-Svix signature scheme is identical to what Resend inbound uses, so we
-share verification with email_webhook.py.
+Svix signature verification is self-contained below (inline HMAC over
+the svix-id/timestamp/payload triple).
 """
 
 from __future__ import annotations

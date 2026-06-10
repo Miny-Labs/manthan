@@ -38,10 +38,11 @@ Files:
 - `coral-bootstrap.sh` — registers Coral sources at worker start; skips
   sources with missing credentials; always exits 0.
 - `worker-entrypoint.sh` — Cloud Run command override for the worker
-  (coral bootstrap + `$PORT` health shim + the investigate worker).
+  (coral bootstrap + `$PORT` health shim + the deterministic workers,
+  actor + prettifier).
 - `secrets-bootstrap.sh` — env file → Secret Manager with per-secret IAM.
 - `sql-migrate.sh` — applies `manthan-api/schema/*.sql` in order via psql.
-- `deploy.sh` — `gcloud builds submit` + `gcloud run deploy` × 3.
+- `deploy.sh` — 2 × `gcloud builds submit` + 6 × `gcloud run deploy` (api gateway, investigator, triage, advisor, worker, ui).
 - `Dockerfile.api.dockerignore` / `Dockerfile.ui.dockerignore` —
   per-image context ignores (deploy.sh swaps them in before each docker
   build step; the repo-root `.dockerignore` excludes `manthan-ui` and
@@ -305,6 +306,13 @@ curl -fsS "$API_URL/.well-known/agent-card.json" | python3 -m json.tool         
 curl -fsS -X POST "$ADVISOR_URL/a2a" -H 'content-type: application/json' -d '{
   "jsonrpc": "2.0", "id": 1, "method": "message/send",
   "params": {"skill": "dispute_exposure", "args": {}}
+}' | python3 -m json.tool
+
+# `ask` round-trip — a grounded, cited answer (pass a real case_id from
+# the inbox to scope it to one case; without it the answer is cross-case):
+curl -fsS -X POST "$ADVISOR_URL/a2a" -H 'content-type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 2, "method": "message/send",
+  "params": {"skill": "ask", "args": {"question": "What is our current dispute exposure and which case should I look at first?"}}
 }' | python3 -m json.tool
 
 # Fire a test dispute at the deployed webhook (uses your Stripe TEST key):

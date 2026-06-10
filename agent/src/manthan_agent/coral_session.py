@@ -25,9 +25,10 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Shared contextvar - tools.py reads this to dispatch coral_sql /
-# coral_list_catalog / coral_describe_table through the live Coral
-# MCP session bound here.
+# Shared contextvar - loop.py reads this at run start and binds the
+# session into the per-run tool closures (adk_tools.build_tools), so
+# coral_sql / coral_list_catalog / coral_describe_table dispatch
+# through the live Coral MCP session bound here.
 _ACTIVE_CORAL_SESSION: contextvars.ContextVar[ClientSession | None] = (
     contextvars.ContextVar("manthan_active_coral_session", default=None)
 )

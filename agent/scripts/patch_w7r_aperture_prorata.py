@@ -1,3 +1,6 @@
+# DEMO DATA FIXTURE — KEPT DELIBERATELY. This script writes seed/patch
+# fixture data into the REAL demo SaaS accounts the live demo investigates.
+# Not part of the runtime agent; run manually when standing up a demo world.
 """Patch W7R - Aperture Analytics documented-incident pro-rata partial credit.
 
 Seeds evidence across 8 high-value sources so the Manthan agent investigating

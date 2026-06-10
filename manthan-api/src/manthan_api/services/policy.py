@@ -1,9 +1,10 @@
 """Policy engine - evaluates rules against a case to decide auto vs HITL.
 
-After a brief drops, the investigate worker calls `evaluate_for_case()`. We
-walk enabled rules in priority order, evaluate conditions, return the first
-match (if any). If the match has mode=auto, the worker skips
-awaiting_approval and lets the actor fire the drafted actions immediately.
+After a brief drops, the investigator agent (via `services.case_store`'s
+finalize path) calls `evaluate_for_case()`. We walk enabled rules in
+priority order, evaluate conditions, return the first match (if any). If
+the match has mode=auto, the case skips awaiting_approval and the actor
+fires the drafted actions immediately.
 
 Rule conditions use a small JSON DSL:
 

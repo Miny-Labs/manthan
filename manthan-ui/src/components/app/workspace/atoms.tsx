@@ -1,6 +1,6 @@
 /**
  * Atomic styling helpers for the case workspace.
- * Mirrors the helpers in HeroShowcase so visual treatment stays consistent.
+ * Keeps visual treatment consistent across the workspace surfaces.
  */
 
 import type { ReactNode, CSSProperties } from "react";

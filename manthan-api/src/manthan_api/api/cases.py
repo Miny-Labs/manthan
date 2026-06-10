@@ -11,7 +11,7 @@ import uuid
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from manthan_api.db import get_conn
 from manthan_api.middleware.tenant import TenantCtx, get_ctx
@@ -156,55 +156,6 @@ def _shorten_summary(s: str | None, max_len: int = 220) -> str | None:
     if len(s) <= max_len:
         return s
     return s[: max_len - 1].rstrip() + "…"
-
-
-# ──────────────────────────────────────────────────────────────────────
-# GET /api/cases/{id}/trigger_email
-#   The original email that opened this case, for email-triggered cases.
-#   Webui shows it in a modal labelled "Original email".
-# ──────────────────────────────────────────────────────────────────────
-
-
-@router.get("/{case_id}/trigger_email")
-async def get_trigger_email(
-    case_id: UUID,
-    ctx: TenantCtx = Depends(get_ctx),
-) -> dict:
-    """Return the raw inbound email that opened this case.
-
-    Pulls fields off `cases.trigger_payload` - only relevant for cases
-    with `trigger_surface='inbound_email'`. Returns 404 for other
-    surfaces so the UI can hide the affordance.
-    """
-    async with get_conn() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT trigger_surface, customer_ref, trigger_payload, created_at
-            FROM cases
-            WHERE org_id=$1 AND id=$2
-            """,
-            ctx.org_id, case_id,
-        )
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="case not found")
-    if row["trigger_surface"] != "inbound_email":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="case was not opened via email",
-        )
-    payload = row["trigger_payload"]
-    if isinstance(payload, str):
-        payload = json.loads(payload)
-    payload = payload or {}
-    return {
-        "from_addr": payload.get("from_addr") or row["customer_ref"],
-        "from_name": payload.get("from_name") or "",
-        "subject": payload.get("subject") or "",
-        "received_at": payload.get("received_at") or row["created_at"].isoformat(),
-        "message_id": payload.get("message_id") or "",
-        "text": payload.get("raw_text") or "",
-        "html": payload.get("raw_html") or "",
-    }
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -413,35 +364,6 @@ async def create_case(
             )
 
     return Case(**dict(case_row))
-
-
-# ──────────────────────────────────────────────────────────────────────
-# GET /api/cases/{id}/brief.pdf  - render the brief as a one-page PDF
-# ──────────────────────────────────────────────────────────────────────
-
-
-@router.get("/{case_id}/brief.pdf")
-async def get_brief_pdf(
-    case_id: UUID,
-    ctx: TenantCtx = Depends(get_ctx),
-) -> Response:
-    """Polished one-page PDF of the case brief.
-
-    Used as a Slack attachment (asky PDF) and as a "Download brief" link
-    in the UI. Generated on-demand from latest case state.
-    """
-    from manthan_api.services.brief_pdf import render_brief_pdf
-    try:
-        pdf = await render_brief_pdf(ctx.org_id, case_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="manthan-brief-{case_id}.pdf"',
-        },
-    )
 
 
 def _next_short_id() -> str:

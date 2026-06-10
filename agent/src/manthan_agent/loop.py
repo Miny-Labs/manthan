@@ -1,9 +1,11 @@
 """The investigation driver — ADK Runner inside, identical Event stream out.
 
 This replaces the hand-rolled async-generator ReAct loop with Google ADK. The
-public contract is unchanged on purpose so the existing worker
-(`manthan-api/.../workers/investigate.py`) and every downstream projection keep
-working untouched:
+public contract is unchanged on purpose: the investigator agent service
+(`manthan-api/.../agents/investigator.py`) consumes this stream in-process and
+persists it via `services/case_store.py`, and the script harnesses
+(`agent/scripts/test_investigate.py`, `agent/scripts/smoke_adk.py`) assert on
+the same shape:
 
     async for event in run_case(trigger, cfg, store):
         ...                                  # yields manthan_agent.types.Event

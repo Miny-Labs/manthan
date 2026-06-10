@@ -1,27 +1,24 @@
 """Email dispatcher - single send path for Manthan-branded customer email.
 
 Used by:
-  - api/email_webhook.py        → send_ack_email (auto-ack on case open)
   - adapters/resend.py          → render_branded_html for agent-drafted
-                                   customer_email actions
+                                   customer_email actions (the actor's
+                                   outbound rail)
+  - api/clerk_webhook.py        → send_welcome_email on user.created
 
 Why a dispatcher and not just calling Resend directly:
-  - One place owns the From/Reply-To choices ("manthan@miny-labs.com"
-    inbound vs. "manthan@demo.manthan.quest" outbound display address).
-  - One place writes the `customer_email_sent` event so the timeline +
-    audit log stay accurate regardless of which surface triggered it.
-  - Stripe-dispute lookups (the sketch wanted dispute IDs surfaced in
-    both the ack and the resolution emails) live here, not duplicated
-    across surfaces.
+  - One place owns the From/Reply-To choices (the
+    "manthan@demo.manthan.quest" outbound display address vs. the
+    plain reply mailbox).
+  - One place renders the branded templates so every outbound surface
+    shares the same look.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Any
-from uuid import UUID
 
 from manthan_api.db import get_pool
 from manthan_api.services.email_templates import (
@@ -38,11 +35,9 @@ logger = logging.getLogger("services.email_dispatcher")
 # ──────────────────────────────────────────────────────────────────────
 # From / Reply-To choices.
 #
-# Inbound mailbox = "manthan@miny-labs.com" (Resend inbound parsing).
 # Outbound display = "Manthan <manthan@demo.manthan.quest>" so the brand
-# domain is what the customer sees in their inbox. Reply-To still
-# points to the inbound mailbox so customer replies route back through
-# the webhook.
+# domain is what the customer sees in their inbox. Reply-To points at
+# the plain monitored mailbox.
 # ──────────────────────────────────────────────────────────────────────
 
 DEFAULT_FROM_DISPLAY = os.environ.get(
@@ -58,124 +53,6 @@ DEFAULT_REPLY_TO = os.environ.get(
 # ──────────────────────────────────────────────────────────────────────
 # Public entry points
 # ──────────────────────────────────────────────────────────────────────
-
-
-async def send_ack_email(
-    *,
-    org_id: UUID,
-    case_id: UUID,
-    short_id: str,
-    customer_email: str,
-    customer_name: str,
-    subject_received: str,
-) -> None:
-    """Send the "got your message, investigating" ack.
-
-    Pulls a Stripe dispute id from the case's trigger_payload if the
-    investigator has already linked one. (Usually it's not there yet on
-    inbound; the dispute id appears later when the agent's investigation
-    finds it. The ack still fires immediately without it.)"""
-    stripe_dispute_id = await _stripe_dispute_for_case(case_id)
-
-    subj, html_body = render_ack_email(
-        customer_name=customer_name,
-        customer_email=customer_email,
-        subject_received=subject_received,
-        case_short_id=short_id,
-        stripe_dispute_id=stripe_dispute_id,
-    )
-    text_body = render_plain_text_fallback(html_body)
-
-    external_ref = await _send_via_resend(
-        to=customer_email,
-        subject=subj,
-        html_body=html_body,
-        text_body=text_body,
-        tag="auto_ack",
-    )
-    if external_ref:
-        await _record_customer_email_sent(
-            org_id=org_id,
-            case_id=case_id,
-            kind="ack",
-            external_ref=external_ref,
-            subject=subj,
-            customer_email=customer_email,
-        )
-
-
-async def send_nudge_email(
-    *,
-    org_id: UUID,
-    customer_email: str,
-    customer_name: str,
-    subject_received: str,
-) -> None:
-    """Send the "I see your message but it's brief" reply when the
-    email-webhook's intent classifier judged the inbound as chat-shaped
-    rather than an investigation request. No case is opened; this is
-    purely conversational. Replies via Resend like any other ack -
-    just with copy that points the user at what Manthan actually does.
-    """
-    short_subject = (subject_received or "your message").strip()
-    if len(short_subject) > 60:
-        short_subject = short_subject[:57] + "…"
-    name = (customer_name or "").strip() or customer_email.split("@", 1)[0]
-    subj = f"Re: {short_subject}"
-    text_body = (
-        f"Hi {name},\n\n"
-        "Thanks for emailing! I'm Manthan, an autonomous billing "
-        "investigator. I resolve chargebacks, refund requests, failed "
-        "payments, and dispute responses by reading across every "
-        "connected system in one query and queueing the right actions "
-        "for approval.\n\n"
-        "Your message was a little brief - if you'd like me to "
-        "investigate, just reply with details about the dispute. "
-        "Something like:\n\n"
-        "  > I was charged twice for my Caldera Pro subscription on "
-        "May 22 - both charges are for $89. Please refund the "
-        "duplicate.\n\n"
-        "  > Please dispute charge ch_xxx for $4,500 - the service "
-        "wasn't delivered.\n\n"
-        "Reply with the customer's details (amount, charge id, what "
-        "happened) and I'll dig in across all your connected sources.\n\n"
-        "- Manthan"
-    )
-    html_body = (
-        '<div style="font-family:ui-sans-serif,system-ui,-apple-system,'
-        '\'Segoe UI\',Roboto,sans-serif;font-size:14.5px;line-height:1.55;'
-        'color:#1a1d20;max-width:560px;">'
-        f"<p>Hi {name},</p>"
-        "<p>Thanks for emailing! I'm <strong>Manthan</strong>, an "
-        "autonomous billing investigator. I resolve chargebacks, refund "
-        "requests, failed payments, and dispute responses by reading "
-        "across every connected system in one query and queueing the "
-        "right actions for approval.</p>"
-        "<p>Your message was a little brief - if you'd like me to "
-        "investigate, just reply with details about the dispute. "
-        "Something like:</p>"
-        '<blockquote style="border-left:3px solid #16d05e;background:'
-        '#f7faf7;padding:8px 12px;margin:8px 0;color:#3c4040;">'
-        "I was charged twice for my Caldera Pro subscription on May 22 - "
-        "both charges are for $89. Please refund the duplicate."
-        "</blockquote>"
-        '<blockquote style="border-left:3px solid #16d05e;background:'
-        '#f7faf7;padding:8px 12px;margin:8px 0;color:#3c4040;">'
-        "Please dispute charge ch_xxx for $4,500 - the service wasn't "
-        "delivered."
-        "</blockquote>"
-        "<p>Reply with the customer's details (amount, charge id, what "
-        "happened) and I'll dig in.</p>"
-        "<p>— Manthan</p>"
-        "</div>"
-    )
-    await _send_via_resend(
-        to=customer_email,
-        subject=subj,
-        html_body=html_body,
-        text_body=text_body,
-        tag="nudge",
-    )
 
 
 async def send_welcome_email(
@@ -356,80 +233,3 @@ async def _send_via_resend(
         logger.warning("resend send failed (kind=%s): %s", tag, e)
         return None
 
-
-async def _record_customer_email_sent(
-    *,
-    org_id: UUID,
-    case_id: UUID,
-    kind: str,
-    external_ref: str,
-    subject: str,
-    customer_email: str,
-) -> None:
-    """Emit a `customer_email_sent` event so the UI timeline + audit log
-    surface the outbound message. Same shape Slack uses for its events:
-    the actor field tags the source so the prettifier can render."""
-    async with get_pool().acquire() as conn:
-        thread_id = await conn.fetchval(
-            "SELECT thread_id FROM cases WHERE id=$1",
-            case_id,
-        )
-        if thread_id is None:
-            return
-        for attempt in range(5):
-            try:
-                await conn.execute(
-                    """
-                    WITH next AS (
-                        SELECT COALESCE(MAX(seq), 0) + 1 AS s
-                        FROM events
-                        WHERE org_id=$1 AND thread_id=$2
-                    )
-                    INSERT INTO events (org_id, thread_id, seq, type, actor, data)
-                    SELECT $1, $2, s, 'customer_email_sent', $3, $4 FROM next
-                    """,
-                    org_id, thread_id,
-                    "system:email_dispatcher",
-                    json.dumps({
-                        "kind": kind,
-                        "external_ref": external_ref,
-                        "subject": subject,
-                        "to": customer_email,
-                    }),
-                )
-                return
-            except Exception:
-                if attempt == 4:
-                    raise
-                import asyncio
-                await asyncio.sleep(0.02 * (attempt + 1))
-
-
-async def _stripe_dispute_for_case(case_id: UUID) -> str | None:
-    """If the investigation has already found a Stripe dispute that
-    pertains to this case, surface its ID. We look in two places:
-      1. cases.trigger_payload.stripe_dispute_id (set by webhooks)
-      2. findings.citations[*] where source='stripe' and table='disputes'
-    """
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT
-              trigger_payload->>'stripe_dispute_id' AS direct,
-              (
-                SELECT (citation->>'ref')
-                FROM findings,
-                     jsonb_array_elements(findings.citations) AS citation
-                WHERE findings.case_id = cases.id
-                  AND citation->>'source' = 'stripe'
-                  AND citation->>'table' IN ('disputes','dispute')
-                LIMIT 1
-              ) AS sniffed
-            FROM cases
-            WHERE id = $1
-            """,
-            case_id,
-        )
-    if row is None:
-        return None
-    return row["direct"] or row["sniffed"]

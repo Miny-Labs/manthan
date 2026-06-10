@@ -456,12 +456,11 @@ function memoCaseFromApi(c: ApiCase): MemoCaseData {
     tldr,
     isDemoV2: c.is_demo_v2 === true,
     demoMode: c.demo_mode ?? (c.is_demo_v2 ? "v2" : null),
-    // For v2 cases, customer_ref is literally the operator's logged-in
-    // email (the inbound webhook stamps the sender there). For v3, the
-    // customer_ref is "Vermillion Studios" - the operator's email isn't
-    // on the case at all because Slack identity is bridged by Slack
-    // user_id, not email. We leave loggedInEmail undefined for v3 and
-    // the banner omits the "from <email>" clause.
+    // Legacy seeded-data flags: the guided demo wizards that minted
+    // v2/v3 cases are deleted, but old seeded rows may still carry the
+    // flag. For v2 rows customer_ref held the operator's email, so we
+    // surface it; for v3 rows (and every real case) loggedInEmail stays
+    // undefined and the banner omits the "from <email>" clause.
     loggedInEmail: c.is_demo_v2 ? (c.customer_ref ?? undefined) : undefined,
   };
 }

@@ -31,9 +31,7 @@ import { Logo } from "@/components/Logo";
 import { useLockedTheme } from "@/lib/theme";
 import { LandingHeroDemo } from "@/components/landing/LandingHeroDemo";
 import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
 import { SourceIcon } from "@/components/ui/SourceIcon";
-import { HeroShowcase } from "@/components/marketing/HeroShowcase";
 import {
   WatchScene,
   InvestigateScene,
@@ -578,7 +576,7 @@ function StackStrip() {
               textShadow: "0 1px 2px rgba(0,0,0,0.35)",
             }}
           >
-            Stripe, Salesforce, Zendesk, Notion, Slack, Gmail, and your
+            Stripe, Salesforce, Intercom, Notion, Slack, Datadog, and your
             product analytics. Manthan reads them all in one investigation,
             and cites every record it touches.
           </p>
@@ -804,7 +802,7 @@ function CaseAnatomy() {
           <BentoCard
             delay={0}
             title="Cross-source by default"
-            body="Stripe shows the chargeback. Salesforce shows the account is healthy. Zendesk shows no open tickets. Your refund policy lives in Notion. Manthan reads all four in one investigation, and every claim in the brief cites the exact record it came from."
+            body="Stripe shows the chargeback. Salesforce shows the account is healthy. Intercom shows no open conversations. Your refund policy lives in Notion. Manthan reads all four in one investigation, and every claim in the brief cites the exact record it came from."
             visual={<CrossSourceVisual />}
           />
           <BentoCard
@@ -822,7 +820,7 @@ function CaseAnatomy() {
           <BentoCard
             delay={0.24}
             title="Rules you can read"
-            body="Thresholds, escalation paths, retention plays. Every policy is a visual rule. Flip a switch, drag a slider, watch the projected impact on the next 30 days. No YAML to learn, no commit to review. A senior operator can shape the worker themselves."
+            body="Thresholds, escalation paths, retention plays. Every policy is a visual rule. Flip a switch, drag a slider, watch the projected impact on the next 30 days. No YAML to learn, no commit to review. A senior operator can shape the agent themselves."
             visual={<PolicyVisual />}
           />
           <BentoCard
@@ -919,9 +917,9 @@ function CrossSourceVisual() {
         "38 successful payments over 14 months and zero disputes prior to today. This is the first chargeback ever raised on this customer.",
     },
     3: {
-      srcId: "zendesk",
-      label: "Zendesk",
-      record: "Last ticket · #8412",
+      srcId: "intercom",
+      label: "Intercom",
+      record: "Last conversation · #8412",
       finding:
         "Billing inquiry closed 14 days ago in six minutes with CSAT 5/5. No open tickets, last six all resolved positive.",
     },
@@ -1762,7 +1760,7 @@ function AuditVisual() {
       { who: "manthan", verb: "posted the daily brief in",      object: "#billing-ops",         detail: "Slack",             minsAgo: 1 },
       { who: "you",     verb: "tightened the refund policy to", object: "max $100",             detail: "policy · refunds",  minsAgo: 3 },
       { who: "manthan", verb: "opened a follow-up ticket",      object: "BIL-128",              detail: "Linear",            minsAgo: 5 },
-      { who: "manthan", verb: "emailed an apology to",          object: "TechCorp",             detail: "Gmail",             minsAgo: 5 },
+      { who: "manthan", verb: "emailed an apology to",          object: "TechCorp",             detail: "Resend",             minsAgo: 5 },
       { who: "manthan", verb: "refunded",                       object: "$1,200 to TechCorp",   detail: "Stripe",            minsAgo: 6 },
       { who: "you",     verb: "approved",                       object: "CASE-4821 · TechCorp", detail: "case workspace",    minsAgo: 6 },
       { who: "manthan", verb: "refunded",                       object: "$840 to StartupY",     detail: "Stripe",            minsAgo: 14 },

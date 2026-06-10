@@ -1,9 +1,10 @@
 """Sources - list connected data sources + their live state.
 
-The 11 sources powering Manthan's cross-source investigation. Connection
-status comes from whether the relevant env credentials are present;
-last-query stats come from the events table (tool_call events whose
-SQL references that source).
+The SaaS sources powering Manthan's cross-source investigation (the same
+set `deploy/gcp/coral-bootstrap.sh` registers with Coral, plus
+Salesforce). Connection status comes from whether the relevant env
+credentials are present; last-query stats come from the events table
+(tool_call events whose SQL references that source).
 
 In v1 these creds live in env vars (single-tenant). When we wire OAuth
 onboarding, this will instead read from the `sources` table per org.
@@ -52,19 +53,13 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "id": "intercom", "name": "Intercom", "category": "support",
         "description": "Customer chats, conversations, contacts.",
         "envs": ["INTERCOM_ACCESS_TOKEN"],
-        "capabilities": ["read", "trigger"], "oauth": True,
-    },
-    {
-        "id": "zendesk", "name": "Zendesk", "category": "support",
-        "description": "Tickets, users, organizations.",
-        "envs": ["ZENDESK_API_TOKEN", "ZENDESK_SUBDOMAIN"],
-        "capabilities": ["read", "write", "trigger"], "oauth": False,
+        "capabilities": ["read"], "oauth": True,
     },
     {
         "id": "slack", "name": "Slack", "category": "comms",
         "description": "Channels, mentions, internal team threads.",
         "envs": ["SLACK_TOKEN"],
-        "capabilities": ["read", "write", "trigger"], "oauth": True,
+        "capabilities": ["read", "write"], "oauth": True,
     },
     {
         "id": "notion", "name": "Notion", "category": "knowledge",
@@ -200,11 +195,6 @@ SOURCE_TABLES: dict[str, list[str]] = {
         "hubspot.contacts",
         "hubspot.deals",
         "hubspot.engagements",
-    ],
-    "zendesk": [
-        "zendesk.tickets",
-        "zendesk.users",
-        "zendesk.organizations",
     ],
     "intercom": [
         "intercom.conversations",

@@ -52,24 +52,29 @@ each its own FastAPI app / Cloud Run service / service account
 `deploy/gcp/deploy.sh` deploys all three from the same image with per-agent
 service accounts (Agent Identity); the README documents Agent Engine
 (`adk deploy agent_engine`) as the preferred investigator runtime with Cloud
-Run as the working fallback. Remaining inside the investigator: the
-in-process parallel specialist split (team.py/agents.py — in flight).
+Run as the working fallback. Inside the investigator, the in-process parallel
+specialist split is **DONE** (team.py/agents.py): a coordinator fans out FIVE
+specialists in parallel over one shared Evidence set — payments_analyst,
+customer_context, reliability_analyst, policy_analyst (Notion SOP retrieval =
+RAG), and network_rules_analyst (its own agent with ADK built-in
+google_search grounding) — each wrapped in a ResilientAgentTool with a 180s
+cap so one slow specialist can't stall the run.
 
-## Gap analysis (current repo @ 8df95c0)
+## Gap analysis (current repo @ a8018e1+)
 
 | Criterion | Status | Fix |
 |---|---|---|
 | B2B / Gemini / Cloud Run / A2A baseline | DONE | — |
 | Multi-agent macro split (triage → investigator → case store; advisor face) | **DONE** (see status update above) | — |
-| Multi-agent ADK orchestration (in-process specialists) | IN FLIGHT (team.py/agents.py) | P0 split below |
-| Agent Engine deployment | DOCUMENTED (runbook path; Cloud Run fallback deployed) | P1 runtime profile |
-| Grounding/RAG articulation | WEAK (Coral never framed as grounding; zero Google grounding surfaces) | Frame Coral = live-system grounding + RAG over merchant SOPs (Notion retrieval); add Google Search grounding via the Network-Rules Analyst |
+| Multi-agent ADK orchestration (in-process specialists) | **DONE** (team.py/agents.py: 5 parallel specialists, ResilientAgentTool 180s cap) | — |
+| Agent Engine deployment | DOCUMENTED (runbook path; Cloud Run fallback scripted) | GCP connection: run the P1 runtime profile |
+| Grounding/RAG articulation | **DONE** (Coral = live-system grounding; policy_analyst = RAG over merchant SOPs in Notion; network_rules_analyst = Google Search grounding) | — |
 | Collaboration > single agent, demonstrated | MISSING | Eval chart: solo vs multi config on same 10-case set |
 | Gemini Enterprise registration / Agent Registry | MISSING | agents-cli publish |
 | Identity / Memory Bank / Eval / Simulation / Optimizer | PARTIAL (per-agent SAs + cards shipped; rest scaffolds) | One real, screenshotted loop each |
 | A2A richness | **DONE for v2 asks**: ask / precheck_refund / get_customer_history / dispute_exposure / contribute_evidence + investigate + 6 reads | request_approval + subscribe_case still open |
 
-## Target architecture
+## Architecture (shipped)
 
 ```
 Stripe webhook / A2A ─▶ Triage Agent (gemini-3.1-flash-lite)
@@ -85,19 +90,24 @@ Stripe webhook / A2A ─▶ Triage Agent (gemini-3.1-flash-lite)
                (flash)    posthog      = RAG (flash) CE3.0, MC rules
         └──────────┴──────────┴──────────┴───────────────┘
                               ▼
-                Resolution Agent (gemini-3.5-flash)
-                complete action set → HITL policy gates → actor
+                Coordinator synthesizes the brief + drafts actions
+                → HITL policy gates → deterministic actor
 ```
 
 Notes:
 - Specialists are ADK agents wrapped as AgentTools, fanned out in parallel;
   each has a restricted Coral schema scope and focused prompt. Coordinator
   keeps RunState/Evidence/citations + pacer.
+- There is no separate "resolution agent": the coordinator itself synthesizes
+  the brief and drafts the action set; execution is the deterministic actor
+  worker, after the policy gates.
 - Network-Rules Analyst MUST be its own agent: ADK built-in google_search
   cannot mix with function tools on one agent — multi-agent justified by a
   real constraint, and it hits "Grounding (Google Search)" verbatim.
 - The run_case() Event-stream seam is preserved; sub-agent events stream
-  through the same translator (worker untouched, again).
+  through the same translator, consumed in-process by the investigator agent
+  service (which writes its own rows via services/case_store.py — the
+  NOTIFY-mirror worker is deleted).
 
 ## A2A skill catalog v2 (any state pickup-able → any workflow joinable)
 
@@ -139,7 +149,7 @@ Keep: `investigate_dispute` + the 6 read skills. Card adds securitySchemes
 
 "Stop using disconnected chatbots; start orchestrating autonomous agents with
 full business context" — their words; Manthan is that for the moment money is
-disputed. Today: a webhook wakes a coordinator that commands four specialist
+disputed. Today: a webhook wakes a coordinator that commands five specialist
 agents across nine live business systems and returns a cited, policy-gated
 brief in minutes. Tomorrow: buyers are agents (AP2), disputes are
 agent-to-agent conversations, and the merchant's side of that conversation is
@@ -149,9 +159,12 @@ Enterprise.
 
 ## Build order
 
-- **P0** multi-agent split + A2A skills v2 + Coral streamable-HTTP client.
-- **P1** Agent Engine profile · Registry + GE publish · per-agent identities ·
-  Memory Bank · eval set with solo-vs-multi chart.
-- **P2** RefundDesk companion agent (50-line ADK, discovers card, calls
-  precheck_refund/ask on camera) · Simulation + Optimizer loops · Producer
-  Portal submission · demo video · Trust Center finish.
+- **P0 — SHIPPED**: multi-agent split (macro agents + 5 parallel specialists)
+  + A2A skills v2 + Coral streamable-HTTP sidecar path (0.4.2).
+- **Remaining = GCP-connection items only:**
+  - **P1** Agent Engine profile run · Registry + GE publish · live per-agent
+    identity verification · Memory Bank · eval set with solo-vs-multi chart
+    (needs live runs on a real `PROJECT_ID`).
+  - **P2** RefundDesk companion agent (50-line ADK, discovers card, calls
+    precheck_refund/ask on camera) · Simulation + Optimizer loops · Producer
+    Portal submission · demo video · Trust Center finish.
