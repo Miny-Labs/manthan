@@ -96,6 +96,16 @@ Why this is the right grounding layer for an agent system:
 - **Read-only by design.** Coral is a read layer — the retrieval plane physically cannot write. Actions go through the deterministic actor after human approval, so the grounding/action separation is enforced by architecture, not by prompt.
 - **Credentials stay in the merchant's boundary.** Source keys live with the Coral process (per-tenant secrets in Secret Manager on GCP) and are used only at query time. The model sees rows, never keys.
 
+**The token bill is an architecture decision.**
+
+<p align="center">
+  <img src="docs/track3/assets/coral.png" alt="The bill is an architecture decision — per-source tool calls vs one SQL surface" width="920" />
+</p>
+
+The naive agent build — one MCP server per vendor, a planner picking tool calls — fails on economics before it fails on capability. Every tool result gets appended to a context that every later turn re-reads, so cost grows **quadratically**: a ten-step loop pays roughly **43× the single-call estimate**. Each vendor MCP also ships its own tool catalog the model re-buys every turn, and malformed-call retries quietly tax another 10–20% of the budget. This is the "token tsunami" that is killing agentic projects with working AI.
+
+Coral's discipline spends those tokens on reasoning instead of protocol: **one query language** (one mental model, not thirty tool schemas), **discover-then-query** (the agent walks the catalog at case start and pays only for the sources this case actually has — no schema dump in the system prompt), **typed rows instead of prose**, and constrained tool-call generation so a malformed call can't be produced at all. Coral's published benchmark — 82 real-world tasks against direct vendor MCPs (Datadog, Sentry, Linear, Slack, GitHub) — measured **31% more accurate, 64% more token-efficient, 70% cheaper, 55% faster** on complex tasks; their worked example ("what label groups do we use?") takes 29 tool calls and 134 seconds through vendor MCPs versus one SQL query, 6 calls, 21 seconds through Coral. Same data, same model — the architecture decides the bill. For a per-case service business, that's the difference between a unit margin and a loss.
+
 In the system, the coordinator and the four data specialists share one Coral MCP session (`coral_sql`, `coral_list_catalog`, `coral_describe_table`); every query is recorded as an event, and the Workspace's Coral mode shows the raw SQL feed beside the narrative.
 
 ## The business case
