@@ -11,14 +11,18 @@ working untouched:
 
 Internally we:
   1. read the live Coral MCP session the caller bound (set_active_coral_session)
-  2. build the six tools (adk_tools) + the pacer callbacks (adk_pacer)
-  3. construct an ADK Agent on the configured Gemini model (AI Studio)
-  4. run it, translating each ADK event into the Manthan Event vocabulary
+  2. build the investigator TEAM via team.build_coordinator — the pro-model
+     coordinator with the six adk_tools closures, the parallel specialist
+     AgentTools (payments / customer-context / reliability / policy /
+     network-rules), and the pacer callbacks, all sharing one RunState
+  3. run it, translating each ADK event into the Manthan Event vocabulary
      (case_opened / tool_call / tool_result / finding_recorded / agent_thought
       / brief_drafted / hitl_pause / case_closed / error)
 
 The Evidence list + integer citation indices + the defensive brief assembly all
-live in adk_tools; the money-mover + pacing rules live in adk_pacer/pacer.
+live in adk_tools; the money-mover + pacing rules live in adk_pacer/pacer; the
+team layout lives in team.py. The Event stream stays the contract for the test
+harness, but production now writes through the case_store service directly.
 """
 
 from __future__ import annotations
@@ -28,18 +32,15 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
-from google.adk.agents import Agent
-from google.adk.models.google_llm import Gemini
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from .adk_pacer import build_pacer_callbacks
-from .adk_tools import RunState, build_tools
+from .adk_tools import RunState
 from .config import Config
 from .coral_session import get_active_coral_session
-from .prompts import SYSTEM
 from .state import EventStore
+from .team import build_coordinator
 from .tracing import current_trace_ids
 from .types import CaseTrigger, Event
 
@@ -127,32 +128,12 @@ async def run_case(
                       data={"reason": "error", "detail": "no active Coral session"})
         return
 
-    # 2. Build tools + pacer + agent for this run.
+    # 2. Build the coordinator + specialists + pacer for this run. The team
+    #    shares one RunState; the Gemini retry wrapper (transient AI Studio
+    #    503s) lives inside team.gemini_with_retry.
     catalog_tool = await _detect_catalog_tool(session)
     state = RunState()
-    tools = build_tools(session, catalog_tool, state)
-    before_model, before_tool = build_pacer_callbacks(state, trigger.text)
-
-    # Wrap the model with retry/backoff so transient AI Studio 503s ("high
-    # demand" spikes) ride through instead of aborting an investigation.
-    model = Gemini(
-        model=cfg.model,
-        retry_options=types.HttpRetryOptions(
-            attempts=6,
-            initial_delay=1.0,
-            max_delay=30.0,
-            exp_base=2.0,
-            http_status_codes=[429, 500, 502, 503, 504],
-        ),
-    )
-    agent = Agent(
-        name="investigator",
-        model=model,
-        instruction=SYSTEM,
-        tools=tools,
-        before_model_callback=before_model,
-        before_tool_callback=before_tool,
-    )
+    agent = build_coordinator(cfg, session, catalog_tool, state, trigger.text)
 
     session_service = InMemorySessionService()
     await session_service.create_session(

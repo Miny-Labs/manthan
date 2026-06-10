@@ -2,7 +2,9 @@
 #
 # Two process groups:
 #   web      - uvicorn FastAPI (the public API)
-#   workers  - supervisord-managed investigate + actor + prettifier
+#   workers  - actor + prettifier (investigate worker retired - the
+#              investigator agent writes its own events via
+#              manthan_api.services.case_store)
 #
 # Provision before first deploy:
 #   fly postgres create --name manthan-db --region iad
@@ -28,7 +30,6 @@ primary_region = "iad"
 
 [processes]
   web = "uv run uvicorn manthan_api.main:app --host 0.0.0.0 --port 8000"
-  investigate = "uv run python -m manthan_api.workers.investigate"
   actor = "uv run python -m manthan_api.workers.actor"
   prettifier = "uv run python -m manthan_api.workers.prettifier"
 
@@ -63,11 +64,6 @@ primary_region = "iad"
   size = "shared-cpu-1x"
   memory = "512mb"
   processes = ["web"]
-
-[[vm]]
-  size = "shared-cpu-1x"
-  memory = "768mb"
-  processes = ["investigate"]
 
 [[vm]]
   size = "shared-cpu-1x"

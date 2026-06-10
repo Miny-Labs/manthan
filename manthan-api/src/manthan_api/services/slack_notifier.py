@@ -2,9 +2,9 @@
 
 The Slack-native trigger surface (Events API router + slack_bot service) was
 removed in the Track 3 refactor: cases can no longer originate from Slack
-mentions/DMs, so there is no thread to mirror events back into. The workers
-(investigate / actor / chat_loop) still call these hooks behind try/except,
-so the module keeps its public API and simply does nothing.
+mentions/DMs, so there is no thread to mirror events back into. Remaining
+callers (the actor worker) still call these hooks behind try/except, so the
+module keeps its public API and simply does nothing.
 
 Slack as an ACTION remains fully supported — the actor's `slack_brief`
 action kind posts via adapters/slack.py after human approval. Only the

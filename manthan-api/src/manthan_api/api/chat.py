@@ -1,11 +1,14 @@
 """Cross-case agent chat.
 
-Different from per-case chat (workers/chat_loop). This is the "talk to
-the agent across all the cases" surface - answers questions like
+The "talk to the agent across all the cases" surface - answers questions like
 "which customers had refunds delayed past 5 days?" or "MRR down 4%, why?"
 
-For v1 it's a stateless single-shot LLM call seeded with recent cases.
-For v2 we'd add coral_sql tool access so the agent can run live queries.
+v1 is a stateless single-shot LLM call seeded with recent cases. It now rides
+the SAME grounded-answer implementation the advisor agent's ask() skill uses
+(services.a2a_store.grounded_answer -> manthan_agent.llm.generate_text via AI
+Studio) instead of the retired OpenRouter client - one Q&A engine for the
+operator UI and the A2A surface. Per-case follow-ups go through the advisor's
+`ask` skill; the old per-case chat_loop worker is deleted.
 
 Endpoint: POST /api/chat  body: { message: str }
 """
@@ -14,19 +17,20 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from manthan_api.db import get_conn
 from manthan_api.middleware.tenant import TenantCtx, get_ctx
+from manthan_api.services.a2a_store import grounded_answer
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger("manthan_api.chat")
 
-MODEL = os.environ.get("MANTHAN_CHAT_MODEL", "google/gemini-3.1-flash-lite")
+# Optional model pin (AI Studio model id); default resolves inside
+# grounded_answer to the cheap triage tier (gemini-3.1-flash-lite).
+MODEL = os.environ.get("MANTHAN_CHAT_MODEL") or None
 
 
 class ChatRequest(BaseModel):
@@ -56,13 +60,6 @@ async def chat(
     body: ChatRequest,
     ctx: TenantCtx = Depends(get_ctx),
 ) -> ChatResponse:
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OPENROUTER_API_KEY is not configured",
-        )
-
     # Pull recent cases for grounding.
     async with get_conn() as conn:
         rows = await conn.fetch(
@@ -101,44 +98,20 @@ async def chat(
             f"{r['case_type'] or 'case'} · {amt} · {r['trigger_surface']} · "
             f"status={r['status']} · decision={dec} {dec_amt}".strip()
         )
-    context_block = "\n".join(context_lines)
-
-    user_payload = (
-        f"CONTEXT - last 20 cases for this workspace:\n{context_block}\n\n"
-        f"OPERATOR ASKS: {body.message}"
+    context_block = (
+        "Last 20 cases for this workspace:\n" + "\n".join(context_lines)
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as http:
-            r = await http.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://app.manthan.quest",
-                    "X-Title": "Manthan cross-case chat",
-                },
-                json={
-                    "model": MODEL,
-                    "max_tokens": 320,
-                    "temperature": 0.3,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM},
-                        {"role": "user", "content": user_payload},
-                    ],
-                },
-            )
-            r.raise_for_status()
-            body_json: Any = r.json()
-            reply_text = (
-                ((body_json.get("choices") or [{}])[0].get("message") or {}).get("content")
-                or "(no reply)"
-            )
-    except httpx.HTTPError as e:
-        logger.exception("chat LLM call failed: %s", e)
+    # Same engine as the advisor's ask(): one grounded Gemini call with a
+    # graceful degrade when the key is missing or the call fails.
+    answer, grounded = await grounded_answer(
+        body.message, context_block=context_block, system=SYSTEM, model=MODEL
+    )
+    if not grounded:
+        logger.warning("chat LLM unavailable: %s", answer)
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"LLM call failed: {type(e).__name__}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=answer,
         )
 
-    return ChatResponse(reply=reply_text.strip(), cases_seen=len(rows))
+    return ChatResponse(reply=answer.strip(), cases_seen=len(rows))

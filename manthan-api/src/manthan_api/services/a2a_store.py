@@ -1,12 +1,15 @@
 """Postgres-backed CaseStore for the A2A surface.
 
-`PgCaseStore` duck-types `manthan_agent.a2a.store.CaseStore`: every A2A query
-skill (get_case, list_cases, get_brief, get_findings, get_actions,
-get_audit_trail) reads straight from the cases/events/findings/actions
-projections, and the investigate_dispute action funnels into the exact same
-case-creation flow the web "+ New" button uses (cases insert + `case_opened`
-event; the `events_notify` trigger fires PG NOTIFY 'manthan_event' so the
-investigate worker picks the case up).
+`PgCaseStore` duck-types `manthan_agent.a2a.store.CaseStore` and extends it
+with the advisor skill surface: every A2A query skill (get_case, list_cases,
+get_brief, get_findings, get_actions, get_audit_trail) reads straight from the
+cases/events/findings/actions projections; the advisor skills (ask,
+precheck_refund, get_customer_history, dispute_exposure, contribute_evidence)
+layer Q&A + collaboration on the same tables; and the investigate_dispute
+action funnels into the exact same case-creation flow the web "+ New" button
+uses (cases insert + `case_opened` event). The retired investigate worker's
+NOTIFY hop is gone - the investigator agent service runs the investigation
+in-process (manthan_api.agents.investigator) and writes its own events.
 
 Org scoping: A2A traffic has no Clerk member context, so the store binds to a
 single org resolved once from the MANTHAN_A2A_ORG slug (default: the `acme`
@@ -15,6 +18,7 @@ dev org seeded by scripts/bootstrap_dev_org.py).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
@@ -26,6 +30,9 @@ from manthan_api.db import get_conn
 
 # Matches scripts/bootstrap_dev_org.py DEV_ORG_SLUG.
 DEFAULT_A2A_ORG_SLUG = "acme"
+
+# Case statuses that count as "open" for advisor aggregates/prechecks.
+OPEN_STATUSES = ("investigating", "awaiting_approval", "acting", "escalated")
 
 
 def _default_org_slug() -> str:
@@ -109,6 +116,149 @@ def _amount_from_structured(structured: dict[str, Any]) -> tuple[int | None, str
                 cur = d.get("currency")
                 return v, cur.lower() if isinstance(cur, str) else None
     return None, None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# advisor helpers - pure rules + the one-shot grounded LLM call
+#
+# These are module-level (not methods) so the advisor's unit tests and the
+# in-memory test store exercise the exact same logic without Postgres.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def precheck_recommendation(
+    prior_disputes: int,
+    open_cases: int,
+    outcomes: dict[str, int],
+    *,
+    amount_minor: int | None = None,
+) -> str:
+    """Deterministic refund-precheck rules - no LLM, no I/O.
+
+      1. any OPEN case for this customer            -> investigate_first
+      2. >=3 prior disputes OR >=2 'fight' verdicts -> high_risk
+      3. zero prior disputes AND amount < $500
+         (or amount unknown)                        -> low_risk
+      4. everything else                            -> investigate_first
+    """
+    if open_cases > 0:
+        return "investigate_first"
+    if prior_disputes >= 3 or outcomes.get("fight", 0) >= 2:
+        return "high_risk"
+    if prior_disputes == 0 and (amount_minor is None or amount_minor < 50000):
+        return "low_risk"
+    return "investigate_first"
+
+
+ASK_SYSTEM = """\
+You are Manthan's advisor, answering another agent's (or operator's) question \
+about a billing case. The CONTEXT block carries the case's recorded findings \
+(numbered) and the drafted brief. Answer ONLY from that context.
+
+Rules:
+- Cite finding indices inline like [1] or [2][4] for every claim you make.
+- If the context cannot answer the question, say so plainly - never invent data.
+- 2-5 sentences, plain English, no engineering jargon.
+"""
+
+LLM_UNAVAILABLE_ANSWER = (
+    "LLM unavailable - GOOGLE_API_KEY is not configured on this service, so I "
+    "can't synthesize an answer. The raw case record is still readable via the "
+    "get_findings / get_brief / get_audit_trail skills."
+)
+
+
+def build_ask_grounding(
+    findings: list[dict[str, Any]],
+    brief: dict[str, Any] | None,
+    *,
+    case_label: str = "",
+) -> str:
+    """Render findings + brief into the CONTEXT block ask() grounds on."""
+    lines: list[str] = []
+    if case_label:
+        lines.append(f"CASE: {case_label}")
+    lines.append("FINDINGS:")
+    if findings:
+        for i, f in enumerate(findings, start=1):
+            if not isinstance(f, dict):
+                continue
+            seq = f.get("seq", i)
+            conf = f.get("confidence")
+            conf_str = f" (conf {conf:.2f})" if isinstance(conf, (int, float)) else ""
+            lines.append(f"[{seq}]{conf_str} {f.get('text', '')}")
+    else:
+        lines.append("(no findings recorded)")
+    if isinstance(brief, dict):
+        if brief.get("tldr"):
+            lines.append(f"BRIEF TL;DR: {str(brief['tldr'])[:800]}")
+        decision = brief.get("decision")
+        if isinstance(decision, dict):
+            lines.append(
+                "DECISION: "
+                f"{decision.get('action')} "
+                f"amount_minor={decision.get('amount_minor')} "
+                f"confidence={decision.get('confidence')}"
+            )
+    return "\n".join(lines)
+
+
+async def grounded_answer(
+    question: str,
+    *,
+    context_block: str,
+    system: str = ASK_SYSTEM,
+    model: str | None = None,
+) -> tuple[str, bool]:
+    """ONE Gemini call grounded on the supplied context.
+
+    Returns (answer, grounded). When GOOGLE_API_KEY is missing (or the call
+    fails) the answer degrades to an explicit "LLM unavailable" message with
+    grounded=False instead of raising - the A2A surface must stay up even
+    on an un-keyed deployment.
+    """
+    # Lazy import so importing this module never requires google-genai at
+    # collection time; module-attribute access keeps monkeypatching of
+    # manthan_agent.llm.generate_text effective in tests.
+    from manthan_agent import config as agent_config
+    from manthan_agent import llm as agent_llm
+
+    cfg = agent_config.load()
+    user = f"CONTEXT:\n{context_block}\n\nQUESTION: {question}"
+    try:
+        text = await asyncio.to_thread(
+            agent_llm.generate_text,
+            cfg,
+            user=user,
+            system=system,
+            model=model or cfg.model_triage,
+            temperature=0.2,
+            max_output_tokens=512,
+        )
+        return (text or "(no reply)"), True
+    except agent_llm.LLMNotConfigured:
+        return LLM_UNAVAILABLE_ANSWER, False
+    except Exception as exc:  # noqa: BLE001 - keep the A2A surface alive
+        return f"LLM unavailable ({type(exc).__name__}: {exc}).", False
+
+
+async def run_ask(
+    question: str,
+    *,
+    findings: list[dict[str, Any]],
+    brief: dict[str, Any] | None,
+    case_label: str = "",
+) -> dict[str, Any]:
+    """The shared ask() implementation: ground on findings+brief, one call."""
+    grounding = build_ask_grounding(findings, brief, case_label=case_label)
+    answer, grounded = await grounded_answer(question, context_block=grounding)
+    return {
+        "question": question,
+        "answer": answer,
+        "grounded": grounded,
+        "findings_used": len(findings),
+        "case": case_label or None,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -389,3 +539,179 @@ class PgCaseStore:
             }
             for r in rows
         ]
+
+    # ---- advisor skills (conversational / collaborate surface) ----
+
+    async def ask(
+        self, question: str, case_id: str | None = None
+    ) -> dict[str, Any]:
+        """ONE Gemini call grounded on the case's findings + brief from PG.
+
+        v1 is case-scoped and Coral-free: the grounding is whatever the
+        investigator already recorded. Citations come back as finding
+        indices ([1], [3]...) that map to get_findings seq numbers.
+        """
+        if not case_id:
+            return {
+                "question": question,
+                "answer": (
+                    "Provide a case_id - v1 ask() answers per-case questions "
+                    "grounded on that case's recorded findings and brief."
+                ),
+                "grounded": False,
+                "findings_used": 0,
+                "case": None,
+            }
+        case = await self.get_case(case_id)
+        if case is None:
+            return {
+                "question": question,
+                "answer": f"Unknown case '{case_id}'.",
+                "grounded": False,
+                "findings_used": 0,
+                "case": None,
+            }
+        findings = await self.get_findings(case_id)
+        brief = await self.get_brief(case_id)
+        return await run_ask(
+            question,
+            findings=findings,
+            brief=brief,
+            case_label=case.get("short_id") or case_id,
+        )
+
+    async def precheck_refund(
+        self, customer_ref: str, amount_minor: int | None = None
+    ) -> dict[str, Any]:
+        """Pre-refund risk check for an external CS/refund-desk agent.
+
+        Pure SQL over this org's cases for the customer_ref; the
+        recommendation is derived by precheck_recommendation (deterministic
+        rules, no LLM)."""
+        if not customer_ref:
+            return {"error": "customer_ref is required"}
+        org_id = await self._org()
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT status, decision_action
+                FROM cases
+                WHERE org_id = $1 AND customer_ref = $2
+                ORDER BY created_at DESC
+                LIMIT 200
+                """,
+                org_id,
+                customer_ref,
+            )
+        prior_disputes = len(rows)
+        open_cases = sum(1 for r in rows if r["status"] in OPEN_STATUSES)
+        outcomes: dict[str, int] = {}
+        for r in rows:
+            if r["decision_action"]:
+                outcomes[r["decision_action"]] = outcomes.get(r["decision_action"], 0) + 1
+        return {
+            "customer_ref": customer_ref,
+            "amount_minor": amount_minor,
+            "prior_disputes": prior_disputes,
+            "open_cases": open_cases,
+            "outcomes": outcomes,
+            "recommendation": precheck_recommendation(
+                prior_disputes, open_cases, outcomes, amount_minor=amount_minor
+            ),
+        }
+
+    async def get_customer_history(
+        self, customer_ref: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Episodic memory by customer_ref: this customer's cases + decisions."""
+        if not customer_ref:
+            return []
+        org_id = await self._org()
+        limit = max(1, min(int(limit or 20), 100))
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, short_id, status, case_type, customer_ref, amount_minor,
+                       decision_action, decision_amount_minor, decision_confidence,
+                       created_at
+                FROM cases
+                WHERE org_id = $1 AND customer_ref = $2
+                ORDER BY created_at DESC
+                LIMIT $3
+                """,
+                org_id,
+                customer_ref,
+                limit,
+            )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            proj = _case_projection(r)
+            proj["case_type"] = r["case_type"]
+            proj["amount_minor"] = r["amount_minor"]
+            proj["created_at"] = r["created_at"].isoformat() if r["created_at"] else None
+            out.append(proj)
+        return out
+
+    async def dispute_exposure(self) -> dict[str, Any]:
+        """Aggregate exposure for CFO-style agents: open case count + the
+        sum of decision_amount_minor grouped by status."""
+        org_id = await self._org()
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT status,
+                       COUNT(*)                              AS cases,
+                       COALESCE(SUM(decision_amount_minor), 0) AS decision_amount_minor
+                FROM cases
+                WHERE org_id = $1
+                GROUP BY status
+                """,
+                org_id,
+            )
+        by_status = {
+            r["status"]: {
+                "cases": int(r["cases"]),
+                "decision_amount_minor": int(r["decision_amount_minor"]),
+            }
+            for r in rows
+        }
+        open_cases = sum(v["cases"] for s, v in by_status.items() if s in OPEN_STATUSES)
+        open_amount = sum(
+            v["decision_amount_minor"] for s, v in by_status.items() if s in OPEN_STATUSES
+        )
+        return {
+            "open_cases": open_cases,
+            "open_decision_amount_minor": open_amount,
+            "by_status": by_status,
+        }
+
+    async def contribute_evidence(
+        self,
+        case_id: str,
+        evidence: dict[str, Any],
+        contributor: str = "remote",
+    ) -> dict[str, Any]:
+        """External agent pushes evidence onto an open case's thread.
+
+        Appends an `evidence_contributed` event with actor 'a2a:<contributor>'
+        so provenance is visible in the audit trail; the investigator (or an
+        operator) picks it up from there."""
+        cid = _to_uuid(case_id)
+        if cid is None:
+            return {"error": f"invalid case_id '{case_id}'"}
+        org_id = await self._org()
+        async with get_conn() as conn:
+            thread_id = await self._thread_id(conn, org_id, cid)
+        if thread_id is None:
+            return {"error": f"unknown case '{case_id}'"}
+        data = evidence if isinstance(evidence, dict) else {"text": str(evidence)}
+        actor = f"a2a:{contributor or 'remote'}"
+        from manthan_api.services.case_store import append_event as _append_event
+
+        await _append_event(org_id, thread_id, "evidence_contributed", actor, data)
+        return {
+            "contributed": True,
+            "case_id": case_id,
+            "type": "evidence_contributed",
+            "actor": actor,
+        }

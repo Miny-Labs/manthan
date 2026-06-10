@@ -3,9 +3,14 @@
 The card MUST live at /.well-known/agent-card.json (no /api prefix) per the
 A2A discovery convention, so this router is registered without a prefix.
 
-The protocol layer (build_agent_card / dispatch) lives in the agent package
-(manthan_agent.a2a); this module only wires it to FastAPI and the
-Postgres-backed CaseStore.
+This is now the AGGREGATOR/GATEWAY surface: the dedicated agent services
+(manthan_api.agents.{triage,investigator,advisor}) each serve their own card,
+but this endpoint stays up for back-compat and one-URL discovery. It
+dispatches through the advisor's dispatcher (which adds the ask /
+precheck_refund / get_customer_history / dispute_exposure /
+contribute_evidence skills on the shared PgCaseStore and routes
+investigate_dispute to the investigator), and when ADVISOR_A2A_URL is set the
+card points callers at the advisor service - the conversational face.
 """
 
 from __future__ import annotations
@@ -16,8 +21,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from manthan_agent.a2a.card import build_agent_card
-from manthan_agent.a2a.server import dispatch
 
+from manthan_api.agents.advisor import ADVISOR_SKILLS, dispatch_advisor
 from manthan_api.services.a2a_store import PgCaseStore
 
 router = APIRouter(tags=["a2a"])
@@ -50,7 +55,17 @@ def _identity() -> dict[str, Any]:
 async def agent_card(request: Request) -> dict[str, Any]:
     """The Manthan AgentCard - identity + skill catalog for A2A discovery."""
     base_url = os.environ.get("A2A_PUBLIC_URL") or str(request.base_url)
-    return build_agent_card(base_url, identity=_identity())
+    card = build_agent_card(base_url, identity=_identity())
+    # Gateway card advertises the advisor skills too - this endpoint serves
+    # them via dispatch_advisor over the shared PgCaseStore.
+    card["skills"] = ADVISOR_SKILLS + card["skills"]
+    # When the dedicated advisor service exists, point callers at it (the
+    # gateway keeps proxying /a2a unchanged for anyone already wired here).
+    advisor_url = os.environ.get("ADVISOR_A2A_URL")
+    if advisor_url:
+        u = advisor_url.rstrip("/")
+        card["url"] = u if u.endswith("/a2a") else u + "/a2a"
+    return card
 
 
 @router.post("/a2a")
@@ -64,4 +79,4 @@ async def a2a_rpc(request: Request) -> dict[str, Any]:
             "id": None,
             "error": {"code": -32700, "message": "invalid JSON"},
         }
-    return await dispatch(payload, get_store())
+    return await dispatch_advisor(payload, get_store())

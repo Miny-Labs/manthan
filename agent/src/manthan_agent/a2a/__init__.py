@@ -12,6 +12,7 @@ in-memory store; manthan-api mounts it over its Postgres-backed CaseStore.
 """
 
 from .card import build_agent_card
+from .client import A2AClientError, call_skill, get_card, skill_data
 from .server import create_a2a_app, dispatch
 from .store import CaseStore, InMemoryCaseStore
 
@@ -21,4 +22,8 @@ __all__ = [
     "dispatch",
     "CaseStore",
     "InMemoryCaseStore",
+    "call_skill",
+    "get_card",
+    "skill_data",
+    "A2AClientError",
 ]

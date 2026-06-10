@@ -1,12 +1,14 @@
 # Multi-stage build:
 #   1. coral-builder - Rust 1.95, compiles the Coral binary from sibling source
-#   2. base          - Python 3.12 + uv + FastAPI app + 3 workers
+#   2. base          - Python 3.12 + uv + FastAPI app + workers
 #
 # Build context: the manthanv2/ root (so coral/, agent/, manthan-api/ are
 # all siblings). Configured in fly.toml: `build.dockerfile`.
 #
-# Fly.io: process groups in fly.toml run web / investigate / actor /
-# prettifier as separate machines, each launched from this image.
+# Fly.io: process groups in fly.toml run web / actor / prettifier as
+# separate machines, each launched from this image. (The investigate
+# worker is retired - the investigator agent writes its own events via
+# manthan_api.services.case_store.)
 
 # ──────────────────────────────────────────────────────────────────────
 # Stage 1 - compile Coral

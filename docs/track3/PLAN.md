@@ -27,6 +27,12 @@ existing UI then need **zero changes** to keep working. New Track-3 surfaces
 This is the single most important decision: blast radius = the `agent/` package
 + additive infra. Everything downstream is preserved.
 
+> **Update (native spine):** the seam held and then moved — the worker is now
+> DELETED. The same `run_case()` Event stream is consumed in-process by the
+> investigator agent service (`manthan-api/src/manthan_api/agents/
+> investigator.py`), which writes the identical projections through
+> `services/case_store.py`. See §4b.
+
 ---
 
 ## 2. Model strategy (verified live on the provided AI Studio key)
@@ -81,22 +87,30 @@ remaining non-agent generations (prettifier, cross-case chat).
 | `coral_session.py` | **KEEP** | `coral mcp-stdio` MCP client works as-is with 0.3.0 |
 | `agent.py` | **NEW** | ADK Agent definitions (investigator + later triage/actions) + callbacks |
 
-### 4b. `manthan-api/` (mostly preserved)
+### 4b. `manthan-api/` (the de-bolting: agents ARE the system)
+
+**Status: the native spine is in.** The NOTIFY-mirror investigate worker is
+DELETED; the investigator agent service runs `run_case()` in-process and
+writes its own events/projections through `services/case_store.py` (the
+worker's mirror logic, extracted verbatim). Three macro agents, each its own
+FastAPI app + Cloud Run service + service account:
 
 | Area | Action | Notes |
 |---|---|---|
-| `workers/investigate.py` | **KEEP (untouched)** | consumes `run_case()` — the seam |
-| `workers/actor.py` | **KEEP** | real Stripe/email/Slack/HubSpot/Notion writes after approval |
+| `agents/triage.py` | **NEW — done** | own card (`manthan-triage`); POST /webhooks/stripe (5-type fan-out moved here) + A2A `route_event`; calls the investigator via `manthan_agent.a2a.client.call_skill(INVESTIGATOR_A2A_URL, …)`, or in-process (local dev) when the URL is unset |
+| `agents/investigator.py` | **NEW — done** | own card (`manthan-investigator`); A2A `investigate_dispute` creates the case (`insert_case_from_trigger`) then drives `run_case()` as an asyncio background task, mirroring every Event via `services.case_store` (`append_event` / `record_finding_projection` / `record_brief` / `finalize_case`); `investigation_started` dedupe guard kept |
+| `agents/advisor.py` | **NEW — done** | own card (`manthan-advisor`); skills `ask` (one grounded Gemini call over PG findings+brief, cited by finding index, graceful no-key fallback), `precheck_refund` (deterministic rules), `get_customer_history`, `dispute_exposure`, `contribute_evidence` + the 6 reads |
+| `services/case_store.py` | **NEW — done** | the worker's event append + projections as a service; the agent writes its own events |
+| `services/a2a_store.py` | **EXTENDED — done** | PgCaseStore + the five advisor methods; shared pure helpers (`precheck_recommendation`, `run_ask`/`grounded_answer`) |
+| `workers/investigate.py` | **DELETED** | replaced by `agents/investigator.py` — no NOTIFY hop, same rows |
+| `workers/chat_loop.py` | **DELETED** | its only caller was the deleted worker; per-case Q&A is the advisor's `ask` |
+| `workers/actor.py` + `workers/prettifier.py` | **KEEP** | deterministic executor + summaries; `workers/main.py` runs only these |
+| `api/webhooks.py` | **TRANSFORMED — done** | back-compat surface: forwards to triage over A2A when `TRIAGE_A2A_URL` is set, else keeps the direct insert path |
+| `api/a2a.py` | **TRANSFORMED — done** | gateway card (+advisor skills, points at the advisor when `ADVISOR_A2A_URL` set); dispatch routes advisor skills + sends `investigate_dispute` to the investigator |
+| `api/chat.py` | **TRANSFORMED — done** | cross-case chat rides the same `grounded_answer` engine as the advisor's `ask` (AI Studio; OpenRouter dropped) |
 | `adapters/stripe.py` | **KEEP** | real `Dispute.modify` / refund; idempotent |
-| routers: cases, actions, events, inbox, audit, policy, citations, me, metrics, memory, sources, health, webhooks | **KEEP** | core case/brief/action/audit infra + Stripe webhook |
-| `schema/*.sql` (5 migrations) | **KEEP** → port to Cloud SQL | events/cases/findings/actions/policy_rules etc. |
-| `webhooks.py` | **TRANSFORM** | Stripe fan-out: 5 event types → triage → investigator |
-| `workers/prettifier.py` | **TRANSFORM** | OpenRouter → AI Studio (`llm.agenerate_text`) |
-| `config.py` | **TRANSFORM** | add `GOOGLE_API_KEY`; drop `OPENROUTER_API_KEY` reliance |
-| `api/demo.py`, `demo_v2.py`, `demo_v3.py` | **DELETE** | Maya-email + Vermillion-Slack demo wizards |
-| `api/email_webhook.py`, `services/email_*`, `services/resend_inbound.py`, `adapters/resend.py` | **DELETE/RETIRE** | inbound-email (Maya) demo path |
-| `api/slack.py`, `services/slack_bot.py`, `services/slack_notifier.py`, `adapters/slack.py` | **DELETE/RETIRE** | Vermillion Slack demo (actor's slack post can stay as an action kind) |
-| `api/chat.py`, `api/narrative.py`, `workers/chat_loop.py` | **DEFER** | low priority; keep until A2A query skills supersede |
+| routers: cases, actions, events, inbox, audit, policy, citations, me, metrics, memory, sources, health | **KEEP** | merchant UI reads the same tables — zero UI changes |
+| `schema/*.sql` | **KEEP** → Cloud SQL | unchanged; the agents write the same rows the worker did |
 
 ### 4c. `manthan-ui/` (keep app, add observability, drop demos)
 

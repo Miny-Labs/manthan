@@ -22,6 +22,10 @@ dependencies = [
     "google-adk>=2.2",         # Apache-2.0 - Agent Development Kit (agent, tools, callbacks, A2A, eval)
     "google-genai>=2.8",       # Apache-2.0 - Gemini client (AI Studio)
     "mcp>=1.2.0",              # MIT  - Model Context Protocol stdio client (Coral)
+    "httpx>=0.28",             # BSD  - remote A2A client (a2a/client.py); already
+                               #        transitive via google-genai, pinned explicit
+                               #        because we import it directly
+
     "pydantic>=2.7",           # MIT  - typed tool args + structured outputs
     "python-dotenv>=1.0",      # BSD  - loads .env into os.environ
     "anyio>=4.4",              # MIT  - async backend for mcp

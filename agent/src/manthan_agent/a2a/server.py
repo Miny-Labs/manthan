@@ -2,9 +2,12 @@
 
 `dispatch()` is framework-free and unit-tested: it implements the A2A methods
 `message/send` and `tasks/get` over a CaseStore. A2A skills are invoked by
-sending a Message whose data part carries {"skill": <id>, "args": {...}} — the
-action skill (investigate_dispute) starts a case and returns a Task; query
-skills return a Message with the requested artifact.
+sending a Message whose data part carries {"skill": <id>, "args": {...}}.
+Action skills do work: investigate_dispute starts a case and returns a Task;
+contribute_evidence appends an external evidence record and returns
+{ok, recorded}. Query skills (get_* plus the advisor surface: ask,
+precheck_refund, get_customer_history, dispute_exposure) return a Message
+with the requested artifact.
 
 `create_a2a_app()` wraps that in a Starlette app that also serves the
 AgentCard at /.well-known/agent-card.json.
@@ -68,6 +71,17 @@ async def _run_query(skill: str, args: dict[str, Any], store: CaseStore) -> Any:
         return await store.get_actions(case_id)
     if skill == "get_audit_trail":
         return await store.get_audit_trail(case_id)
+    # ---- advisor surface (skills v2) ----
+    if skill == "ask":
+        return await store.ask(args.get("question", ""), args.get("case_id") or None)
+    if skill == "precheck_refund":
+        return await store.precheck_refund(
+            args.get("customer_ref", ""), int(args.get("amount_minor", 0) or 0)
+        )
+    if skill == "get_customer_history":
+        return await store.get_customer_history(args.get("customer_ref", ""))
+    if skill == "dispute_exposure":
+        return await store.dispute_exposure()
     raise KeyError(skill)
 
 
@@ -94,13 +108,22 @@ async def dispatch(payload: dict[str, Any], store: CaseStore) -> dict[str, Any]:
             if skill is None:
                 return _err(req_id, _INVALID_PARAMS, "message has no {skill,args} data part")
 
-            if skill in ACTION_SKILL_IDS:  # investigate_dispute
-                case_id = await store.create_investigation(args)
-                return _ok(req_id, {
-                    "id": case_id,
-                    "status": {"state": "submitted"},
-                    "kind": "task",
-                })
+            if skill in ACTION_SKILL_IDS:
+                if skill == "investigate_dispute":
+                    case_id = await store.create_investigation(args)
+                    return _ok(req_id, {
+                        "id": case_id,
+                        "status": {"state": "submitted"},
+                        "kind": "task",
+                    })
+                if skill == "contribute_evidence":
+                    result = await store.contribute_evidence(
+                        args.get("case_id", ""),
+                        args.get("evidence") or {},
+                        args.get("contributor", "unknown"),
+                    )
+                    return _ok(req_id, _data_message(result))
+                return _err(req_id, _METHOD_NOT_FOUND, f"unrouted action skill '{skill}'")
 
             if skill in QUERY_SKILL_IDS:
                 result = await _run_query(skill, args, store)

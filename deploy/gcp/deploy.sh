@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# deploy.sh — build + deploy the three Manthan services to Cloud Run.
+# deploy.sh — build + deploy the Manthan services to Cloud Run.
 #
-#   manthan-api     FastAPI (uvicorn manthan_api.main:app), public
-#   manthan-worker  same image, command-overridden to the investigate
-#                   worker (PG LISTEN/NOTIFY), private, no CPU throttle
-#   manthan-ui      Vite bundle behind Caddy, public
+#   manthan-api           FastAPI gateway (uvicorn manthan_api.main:app), public
+#   manthan-investigator  same image, command-overridden to the investigator
+#                         agent service (runs investigations in-process),
+#                         own service account, no CPU throttle
+#   manthan-triage        same image, triage agent service (Stripe intake +
+#                         route_event), own service account, public
+#   manthan-advisor       same image, advisor agent service (ask /
+#                         precheck_refund / …), own service account, public
+#   manthan-worker        same image, deterministic workers (actor +
+#                         prettifier), private, no CPU throttle
+#   manthan-ui            Vite bundle behind Caddy, public
+#
+# Per-agent Agent Identity: each agent service runs as its OWN service
+# account (created in README step 2; secret access granted per-secret in
+# step 5). The identity is stamped into each card via A2A_SERVICE_ACCOUNT.
+#
+# Agent Engine note: the investigator is the one service that benefits from
+# Vertex AI Agent Engine (`adk deploy agent_engine`) — see README "Agent
+# runtime choice". This script deploys the Cloud Run fallback, which is the
+# fully-working path today.
 #
 # Prerequisites (see deploy/gcp/README.md for the full runbook):
 #   * APIs enabled: run, cloudbuild, artifactregistry, sqladmin,
@@ -43,6 +59,12 @@ AR_REPO="${AR_REPO:-manthan}"
 # Runtime service account (created in the runbook; needs cloudsql.client
 # + cloudtrace.agent project roles; secret access is per-secret).
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT:-manthan-runtime@${PROJECT_ID}.iam.gserviceaccount.com}"
+
+# Per-agent service accounts (Agent Identity — one SA per macro agent;
+# README step 2 creates them, step 5 grants each one per-secret access).
+TRIAGE_SA="${TRIAGE_SA:-manthan-triage@${PROJECT_ID}.iam.gserviceaccount.com}"
+INVESTIGATOR_SA="${INVESTIGATOR_SA:-manthan-investigator@${PROJECT_ID}.iam.gserviceaccount.com}"
+ADVISOR_SA="${ADVISOR_SA:-manthan-advisor@${PROJECT_ID}.iam.gserviceaccount.com}"
 
 # Optional: Clerk publishable key baked into the UI bundle at build time.
 VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-}"
@@ -229,10 +251,121 @@ gcloud run services update manthan-api \
     --project "$PROJECT_ID" --region "$REGION" \
     --update-env-vars "A2A_PUBLIC_URL=${API_URL}"
 
+# ── 3b. Deploy the three agent services (same image, uvicorn overrides) ─
+# Each is its own Cloud Run service + its own service account (per-agent
+# Agent Identity). Deploy order matters: investigator first (triage and
+# the gateway need its URL), then triage, then advisor.
+
+# manthan-investigator — runs investigations IN-PROCESS as background
+# tasks after acking the A2A call, so:
+#   * --no-cpu-throttling : CPU stays allocated after the response
+#   * min-instances 1     : the instance must outlive the request
+# NOTE: deployed unauthenticated for the hackathon demo (the A2A card is
+# public by design). For production flip to --no-allow-unauthenticated
+# and put ID-token auth on the triage->investigator hop.
+echo "==> deploying manthan-investigator"
+gcloud run deploy manthan-investigator \
+    --project "$PROJECT_ID" \
+    --region "$REGION" \
+    --image "$API_IMAGE" \
+    --command "uvicorn" \
+    --args "manthan_api.agents.investigator:app,--host,0.0.0.0,--port,8080" \
+    --service-account "$INVESTIGATOR_SA" \
+    --add-cloudsql-instances "$SQL_CONN" \
+    --set-secrets "$SET_SECRETS" \
+    --set-env-vars "${COMMON_ENV},A2A_SERVICE_ACCOUNT=${INVESTIGATOR_SA}" \
+    --port 8080 \
+    --cpu 2 \
+    --memory 2Gi \
+    --min-instances 1 \
+    --max-instances 2 \
+    --concurrency 10 \
+    --timeout 600 \
+    --no-cpu-throttling \
+    --allow-unauthenticated
+
+INVESTIGATOR_URL="$(gcloud run services describe manthan-investigator \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --format 'value(status.url)')"
+echo "    manthan-investigator -> ${INVESTIGATOR_URL}"
+gcloud run services update manthan-investigator \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --update-env-vars "A2A_PUBLIC_URL=${INVESTIGATOR_URL}"
+
+# manthan-triage — stateless event intake (Stripe webhooks must reach it,
+# so it is public). No Cloud SQL attachment: it forwards to the
+# investigator over A2A and touches no tables itself.
+echo "==> deploying manthan-triage"
+gcloud run deploy manthan-triage \
+    --project "$PROJECT_ID" \
+    --region "$REGION" \
+    --image "$API_IMAGE" \
+    --command "uvicorn" \
+    --args "manthan_api.agents.triage:app,--host,0.0.0.0,--port,8080" \
+    --service-account "$TRIAGE_SA" \
+    --set-secrets "$SET_SECRETS" \
+    --set-env-vars "${COMMON_ENV},A2A_SERVICE_ACCOUNT=${TRIAGE_SA},INVESTIGATOR_A2A_URL=${INVESTIGATOR_URL}" \
+    --port 8080 \
+    --cpu 1 \
+    --memory 512Mi \
+    --min-instances 0 \
+    --max-instances 3 \
+    --concurrency 80 \
+    --timeout 60 \
+    --allow-unauthenticated
+
+TRIAGE_URL="$(gcloud run services describe manthan-triage \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --format 'value(status.url)')"
+echo "    manthan-triage -> ${TRIAGE_URL}"
+gcloud run services update manthan-triage \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --update-env-vars "A2A_PUBLIC_URL=${TRIAGE_URL}"
+
+# manthan-advisor — the public conversational A2A face (ask /
+# precheck_refund / get_customer_history / dispute_exposure /
+# contribute_evidence + the 6 reads). Needs the DB + the Gemini key.
+echo "==> deploying manthan-advisor"
+gcloud run deploy manthan-advisor \
+    --project "$PROJECT_ID" \
+    --region "$REGION" \
+    --image "$API_IMAGE" \
+    --command "uvicorn" \
+    --args "manthan_api.agents.advisor:app,--host,0.0.0.0,--port,8080" \
+    --service-account "$ADVISOR_SA" \
+    --add-cloudsql-instances "$SQL_CONN" \
+    --set-secrets "$SET_SECRETS" \
+    --set-env-vars "${COMMON_ENV},A2A_SERVICE_ACCOUNT=${ADVISOR_SA},INVESTIGATOR_A2A_URL=${INVESTIGATOR_URL}" \
+    --port 8080 \
+    --cpu 1 \
+    --memory 1Gi \
+    --min-instances 0 \
+    --max-instances 3 \
+    --concurrency 40 \
+    --timeout 120 \
+    --allow-unauthenticated
+
+ADVISOR_URL="$(gcloud run services describe manthan-advisor \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --format 'value(status.url)')"
+echo "    manthan-advisor -> ${ADVISOR_URL}"
+gcloud run services update manthan-advisor \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --update-env-vars "A2A_PUBLIC_URL=${ADVISOR_URL}"
+
+# Wire the gateway: back-compat Stripe webhooks forward to triage, the
+# gateway card points conversational callers at the advisor, and
+# investigate_dispute via the gateway routes to the investigator.
+gcloud run services update manthan-api \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --update-env-vars "TRIAGE_A2A_URL=${TRIAGE_URL},ADVISOR_A2A_URL=${ADVISOR_URL},INVESTIGATOR_A2A_URL=${INVESTIGATOR_URL}"
+
 # ── 4. Deploy manthan-worker (same image, command override) ───────────
-# * --no-cpu-throttling: the worker does background LLM/tool work outside
-#   of request handling; CPU must stay allocated between requests.
-# * min=max=1 instance: the default event bus is single-instance PG
+# Deterministic workers ONLY (actor + prettifier). The investigate worker
+# is retired — investigations run inside manthan-investigator above.
+# * --no-cpu-throttling: the actor does background writes outside of
+#   request handling; CPU must stay allocated between requests.
+# * min=max=1 instance: the actor's queue is single-instance PG
 #   LISTEN/NOTIFY. Run ./pubsub-setup.sh and re-deploy with more
 #   instances only after switching the bus to Pub/Sub.
 
@@ -296,20 +429,31 @@ cat <<EOF
 ──────────────────────────────────────────────────────────────────────
 Deployed.
 
-  API        : ${API_URL}
-  UI         : ${UI_URL}
-  Agent card : ${API_URL}/.well-known/agent-card.json
-  Health     : ${API_URL}/healthz
+  API (gateway)     : ${API_URL}
+  UI                : ${UI_URL}
+  Triage agent      : ${TRIAGE_URL}
+      card          : ${TRIAGE_URL}/.well-known/agent-card.json
+  Investigator agent: ${INVESTIGATOR_URL}
+      card          : ${INVESTIGATOR_URL}/.well-known/agent-card.json
+  Advisor agent     : ${ADVISOR_URL}
+      card          : ${ADVISOR_URL}/.well-known/agent-card.json
+  Gateway card      : ${API_URL}/.well-known/agent-card.json
+  Health            : ${API_URL}/healthz
 
 Next (see README.md sections 8-10):
-  * Stripe webhook endpoint: ${API_URL}/webhooks/stripe/${TENANT}
+  * Stripe webhook endpoint (CANONICAL — triage agent):
+        ${TRIAGE_URL}/webhooks/stripe
+    (back-compat: ${API_URL}/webhooks/stripe/${TENANT} still works and
+     forwards to triage)
     events: charge.dispute.created, charge.dispute.funds_withdrawn,
             charge.dispute.closed, radar.early_fraud_warning.created,
             invoice.payment_failed
     then store the signing secret:
-      ./secrets-bootstrap.sh ${TENANT} <env-file-with-STRIPE_WEBHOOK_SECRET> ${SERVICE_ACCOUNT}
-      and re-run this script (or gcloud run services update manthan-api
+      ./secrets-bootstrap.sh ${TENANT} <env-file-with-STRIPE_WEBHOOK_SECRET> ${TRIAGE_SA}
+      and re-run this script (or gcloud run services update manthan-triage
       --set-secrets ... ) to attach it.
-  * Optional multi-instance bus: ./pubsub-setup.sh
+  * Optional multi-instance bus for the actor: ./pubsub-setup.sh
+  * Preferred investigator runtime: Agent Engine (see README "Agent
+    runtime choice") — this script deployed the Cloud Run fallback.
 ──────────────────────────────────────────────────────────────────────
 EOF

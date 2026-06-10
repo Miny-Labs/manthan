@@ -30,18 +30,44 @@ AP2/UCP (agent payments) appear in the Build row — for a disputes product this
 makes A2A *product-native*: when buyers are agents, disputes are
 agent-to-agent conversations.
 
+## Status update — the native spine is in (macro split shipped)
+
+The de-bolting landed: **agents are the system.** Three macro A2A agents,
+each its own FastAPI app / Cloud Run service / service account
+(`manthan-api/src/manthan_api/agents/`):
+
+- **triage** (flash-lite) — Stripe webhook intake + `route_event`; dispatches
+  the investigator over A2A (`INVESTIGATOR_A2A_URL`), with a documented
+  in-process fallback for local dev.
+- **investigator** (pro) — `investigate_dispute` creates the case and runs
+  the ADK investigation **in-process**, writing its own events + projections
+  through `services/case_store.py`. The NOTIFY-mirror investigate worker is
+  **deleted** (chat_loop with it); `workers/main.py` runs only the
+  deterministic actor + prettifier.
+- **advisor** (flash) — the conversational A2A face: `ask` (grounded, cited),
+  `precheck_refund`, `get_customer_history`, `dispute_exposure`,
+  `contribute_evidence` + the 6 reads, over the same Postgres projections the
+  merchant UI reads (zero UI changes).
+
+`deploy/gcp/deploy.sh` deploys all three from the same image with per-agent
+service accounts (Agent Identity); the README documents Agent Engine
+(`adk deploy agent_engine`) as the preferred investigator runtime with Cloud
+Run as the working fallback. Remaining inside the investigator: the
+in-process parallel specialist split (team.py/agents.py — in flight).
+
 ## Gap analysis (current repo @ 8df95c0)
 
 | Criterion | Status | Fix |
 |---|---|---|
 | B2B / Gemini / Cloud Run / A2A baseline | DONE | — |
-| Multi-agent ADK orchestration | MISSING (single Investigator) | P0 split below |
-| Agent Engine deployment | MISSING (Cloud Run only) | P1 runtime profile |
+| Multi-agent macro split (triage → investigator → case store; advisor face) | **DONE** (see status update above) | — |
+| Multi-agent ADK orchestration (in-process specialists) | IN FLIGHT (team.py/agents.py) | P0 split below |
+| Agent Engine deployment | DOCUMENTED (runbook path; Cloud Run fallback deployed) | P1 runtime profile |
 | Grounding/RAG articulation | WEAK (Coral never framed as grounding; zero Google grounding surfaces) | Frame Coral = live-system grounding + RAG over merchant SOPs (Notion retrieval); add Google Search grounding via the Network-Rules Analyst |
 | Collaboration > single agent, demonstrated | MISSING | Eval chart: solo vs multi config on same 10-case set |
 | Gemini Enterprise registration / Agent Registry | MISSING | agents-cli publish |
-| Identity / Memory Bank / Eval / Simulation / Optimizer | PARTIAL (UI surfaces + scaffolds) | One real, screenshotted loop each |
-| A2A richness | THIN (1 action + 6 reads) | Skill catalog v2 below |
+| Identity / Memory Bank / Eval / Simulation / Optimizer | PARTIAL (per-agent SAs + cards shipped; rest scaffolds) | One real, screenshotted loop each |
+| A2A richness | **DONE for v2 asks**: ask / precheck_refund / get_customer_history / dispute_exposure / contribute_evidence + investigate + 6 reads | request_approval + subscribe_case still open |
 
 ## Target architecture
 
@@ -75,19 +101,21 @@ Notes:
 
 ## A2A skill catalog v2 (any state pickup-able → any workflow joinable)
 
-Ask & advise:
-- `ask` — NL question over a case or the whole book → cited answer (backed by
-  the existing chat_loop tool-loop).
+Ask & advise (SHIPPED on the advisor agent):
+- `ask` — NL question over a case → cited answer (one grounded Gemini call
+  over the case's findings+brief; v2: Coral tool-loop for live re-checks).
 - `precheck_refund` — CS/refund-desk agent asks before granting a refund:
   history + usage + risk + recommended path in seconds. Deflects friendly
-  fraud pre-dispute. THE inter-agent demo.
-- `get_customer_history` — episodic memory by customer_ref.
-- `dispute_exposure` — aggregate open exposure / win-rates for CFO agents.
+  fraud pre-dispute. THE inter-agent demo. (SHIPPED — deterministic rules.)
+- `get_customer_history` — episodic memory by customer_ref. (SHIPPED)
+- `dispute_exposure` — aggregate open exposure for CFO agents. (SHIPPED;
+  win-rates still open.)
 
 Collaborate (bidirectional):
 - `contribute_evidence` — external agent pushes evidence into an open case
   (e.g. CS chat transcript), provenance tagged with the caller's Agent
-  Identity; investigator incorporates next round.
+  Identity; investigator incorporates next round. (SHIPPED — event lands on
+  the thread with `a2a:<contributor>` actor.)
 - `request_approval` — A2A-native HITL: an approval agent with a delegated
   mandate (AP2-style) approves a drafted action within limits, signed.
 - `subscribe_case` — push state changes to peers (streaming/webhook).

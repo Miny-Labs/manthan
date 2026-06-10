@@ -92,12 +92,14 @@ manthan-api/
     │   └── clerk_webhook.py     #   /api/webhooks/clerk        (member sync)
     ├── middleware/
     │   └── tenant.py            # org + member resolver (Clerk + dev bypass)
-    ├── workers/
-    │   ├── main.py              #   shared LISTEN loop helpers
-    │   ├── investigate.py       #   drives the agent loop, projects events
+    ├── agents/                  # the three A2A agent services (own apps)
+    │   ├── triage.py            #   Stripe intake + route_event -> investigator
+    │   ├── investigator.py      #   runs the ADK agent in-process, writes events
+    │   └── advisor.py           #   ask/precheck_refund/… conversational face
+    ├── workers/                 # deterministic workers only (no agent here)
+    │   ├── main.py              #   starts actor + prettifier
     │   ├── actor.py             #   drains approved actions to the adapters
-    │   ├── prettifier.py        #   generates event summaries for the UI
-    │   └── chat_loop.py         #   handles human-followup turns post-brief
+    │   └── prettifier.py        #   generates event summaries for the UI
     ├── adapters/                # external-write integrations (not via Coral)
     │   ├── stripe.py            #   refunds + dispute evidence
     │   ├── hubspot.py           #   CRM notes

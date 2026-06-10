@@ -1,8 +1,20 @@
-"""Inbound webhooks - Stripe.
+"""Inbound webhooks - Stripe (back-compat surface).
 
-This is the TRIGGER half of the system: Stripe pushes real billing events
-here, we verify the signature, dedupe by event id, and write a `case_opened`
-row that the investigate worker picks up via LISTEN/NOTIFY.
+The CANONICAL Stripe intake now lives on the triage agent service
+(manthan_api.agents.triage, POST /webhooks/stripe) - this endpoint stays up
+so existing Stripe endpoint configurations keep working. Behavior:
+
+  * TRIAGE_A2A_URL set      -> verify + dedupe here, then FORWARD the event
+                               to the triage agent over A2A (route_event);
+                               triage dispatches the investigator. If the
+                               forward fails we fall back to the direct path
+                               so no webhook is ever dropped.
+  * TRIAGE_A2A_URL unset    -> original direct path: map the event through
+                               the triage contract and open the case here.
+                               The investigator agent service (or its
+                               in-process local-dev handler) picks cases up
+                               by being CALLED - there is no NOTIFY worker
+                               anymore.
 
 Stripe events we fan out on (keys-only auth):
   - charge.dispute.created            → chargeback fight/refund decision (primary)
@@ -20,8 +32,10 @@ and logged so Stripe stops retrying.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
+import os
 from typing import Any
 
 import stripe
@@ -125,6 +139,36 @@ async def stripe_webhook(org_slug: str, request: Request) -> dict[str, Any]:
         logger.info("stripe webhook ignored event type %s (event=%s)", event_type, event_id)
         return {"received": True, "ignored": True, "event_type": event_type}
 
+    # ── Forward to the triage agent when it's deployed ──────────────
+    # TRIAGE_A2A_URL points at the manthan-triage Cloud Run service; the
+    # event crosses an identity boundary via A2A (route_event) and triage
+    # dispatches the investigator. Any failure falls through to the
+    # original direct-insert path below - a webhook must never be lost
+    # because our internal hop hiccuped.
+    triage_url = os.environ.get("TRIAGE_A2A_URL")
+    if triage_url:
+        try:
+            from manthan_agent.a2a.client import call_skill
+
+            result = call_skill(triage_url, "route_event", {"event": event})
+            if inspect.isawaitable(result):
+                result = await result
+            logger.info(
+                "stripe webhook forwarded to triage (event=%s type=%s)",
+                event_id, event_type,
+            )
+            return {
+                "received": True,
+                "forwarded": "triage",
+                "event_type": event_type,
+                "triage": result if isinstance(result, dict) else {"result": result},
+            }
+        except Exception as e:  # noqa: BLE001 - fall back to the direct path
+            logger.warning(
+                "triage forward failed (%s: %s) - using direct insert path",
+                type(e).__name__, e,
+            )
+
     # Map the envelope to a trigger via the cross-agent triage contract.
     # Imported lazily: the triage module ships with the agent-package build
     # and the API must import cleanly without it.
@@ -133,8 +177,9 @@ async def stripe_webhook(org_slug: str, request: Request) -> dict[str, Any]:
     trigger = trigger_from_stripe_event(event)
 
     # Make sure the dedupe key + event type survive in trigger_payload, and
-    # alias the Stripe object under `event_object` - the investigate worker
-    # reads trigger_payload->'event_object' to extract charge/dispute ids.
+    # alias the Stripe object under `event_object` - the action enrichment
+    # (services.case_store) reads trigger_payload->'event_object' to extract
+    # charge/dispute ids.
     structured = dict(trigger.get("structured") or {})
     structured.setdefault("event_id", event_id)
     structured.setdefault("event_type", event_type)
@@ -154,6 +199,19 @@ async def stripe_webhook(org_slug: str, request: Request) -> dict[str, Any]:
             "stripe_event_type": event_type,
         },
     )
+
+    # No NOTIFY worker exists anymore — a case inserted here would sit
+    # uninvestigated forever. Run the investigation in-process exactly the
+    # way triage's local-dev fallback does. Lazy import keeps the gateway
+    # importable without the agents extras.
+    try:
+        from manthan_api.agents.investigator import _spawn_investigation
+
+        _spawn_investigation(org_id, case_id, trigger)
+    except Exception as e:  # noqa: BLE001 — case exists; surface, don't 500
+        logger.exception(
+            "in-process investigation spawn failed for case %s: %s", short_id, e
+        )
 
     logger.info(
         "stripe webhook opened case %s (event=%s type=%s)",

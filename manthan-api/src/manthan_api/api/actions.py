@@ -287,9 +287,14 @@ async def chat_with_agent(
     body: ChatPayload,
     ctx: TenantCtx = Depends(get_ctx),
 ) -> dict[str, Any]:
-    """Append a human_followup event. The investigate worker picks it up
-    via NOTIFY, re-invokes the agent loop with the new message in the same
-    thread, and the agent's reply streams back via SSE."""
+    """Operator follow-up: land the question, answer via the advisor.
+
+    The NOTIFY-driven chat_loop is retired; per-case Q&A is now served by the
+    advisor agent's `ask` skill (one Gemini call grounded on this case's
+    findings + brief, with citation indices). The reply lands on the thread
+    as an agent_reply event so the timeline shows an answer, not a dangling
+    question. Best-effort: if the advisor fails, the followup still queues.
+    """
     async with get_conn() as conn:
         thread_id = await conn.fetchval(
             "SELECT thread_id FROM cases WHERE org_id=$1 AND id=$2",
@@ -307,12 +312,28 @@ async def chat_with_agent(
                 "member_email": ctx.member_email,
             },
         )
-        # Flip case to investigating so the timeline UI re-renders as live.
-        await conn.execute(
-            "UPDATE cases SET status='investigating' WHERE id=$1", case_id,
-        )
 
-    return {"queued": True, "case_id": str(case_id)}
+    # Advisor answer (lazy import; PgCaseStore is bound to the A2A org which
+    # equals the dev org in single-tenant deploys — multi-org chat routing
+    # comes with per-tenant advisor services).
+    answer: str | None = None
+    try:
+        from manthan_api.agents.advisor import get_store as _advisor_store
+
+        result = await _advisor_store().ask(body.message, case_id=str(case_id))
+        if isinstance(result, dict):
+            answer = result.get("answer")
+    except Exception:  # noqa: BLE001 — the followup is already recorded
+        answer = None
+
+    if answer:
+        async with get_conn() as conn:
+            await _append_event(
+                conn, ctx.org_id, thread_id,
+                "agent_reply", "agent",
+                {"text": answer, "in_reply_to": "human_followup"},
+            )
+    return {"queued": True, "case_id": str(case_id), "answered": bool(answer)}
 
 
 # ──────────────────────────────────────────────────────────────────────

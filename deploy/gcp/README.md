@@ -6,9 +6,23 @@ a real `PROJECT_ID` and it deploys the full stack:
 
 | Service | Image | What it runs | Exposure |
 |---|---|---|---|
-| `manthan-api` | `Dockerfile.api` | `uvicorn manthan_api.main:app` (port 8080) | public |
-| `manthan-worker` | `Dockerfile.api` (same image) | `worker-entrypoint.sh` → `python -m manthan_api.workers.main` | private, `--no-cpu-throttling`, 1 instance |
+| `manthan-api` | `Dockerfile.api` | `uvicorn manthan_api.main:app` (port 8080) — gateway + UI API | public |
+| `manthan-triage` | `Dockerfile.api` (same image) | `uvicorn manthan_api.agents.triage:app` — Stripe intake + `route_event` → investigator over A2A | public (Stripe must reach it), own SA `manthan-triage@…` |
+| `manthan-investigator` | `Dockerfile.api` (same image) | `uvicorn manthan_api.agents.investigator:app` — `investigate_dispute` A2A skill; runs the ADK investigation **in-process** and writes events/projections itself (`services.case_store`) | public card (lock down for prod), own SA `manthan-investigator@…`, `--no-cpu-throttling`, min 1 |
+| `manthan-advisor` | `Dockerfile.api` (same image) | `uvicorn manthan_api.agents.advisor:app` — `ask` / `precheck_refund` / `get_customer_history` / `dispute_exposure` / `contribute_evidence` + 6 reads | public, own SA `manthan-advisor@…` |
+| `manthan-worker` | `Dockerfile.api` (same image) | `worker-entrypoint.sh` → `python -m manthan_api.workers.main` (actor + prettifier — **deterministic only**; the investigate worker is retired) | private, `--no-cpu-throttling`, 1 instance |
 | `manthan-ui` | `Dockerfile.ui` | Caddy serving the Vite bundle (SPA fallback, no proxying) | public |
+
+Event flow (no NOTIFY pipeline between agents anymore):
+
+```
+Stripe ─▶ manthan-triage ──A2A investigate_dispute──▶ manthan-investigator
+                                                        │ (in-process ADK run)
+                                                        ▼ writes events/findings/brief
+other agents ─▶ manthan-advisor ──reads/answers──▶  Cloud SQL ◀── manthan-api (UI reads)
+                                                        ▲
+                                     manthan-worker (actor) drains approved actions
+```
 
 Files:
 
@@ -80,21 +94,41 @@ Note: `aiplatform.googleapis.com` (Vertex) is **deliberately not needed**
 — Gemini is called through AI Studio (`generativelanguage.googleapis.com`)
 with a plain `GOOGLE_API_KEY`, which is not a GCP service API you enable.
 
-## 2. Runtime service account
+## 2. Service accounts (per-agent Agent Identity)
+
+One runtime SA for the gateway/worker/UI plumbing, plus **one SA per macro
+agent** — that per-agent identity is what each AgentCard's
+`manthanIdentity.serviceAccount` advertises and what the roster UI shows.
 
 ```bash
 gcloud iam service-accounts create manthan-runtime \
   --display-name "Manthan runtime (api + worker)"
+gcloud iam service-accounts create manthan-triage \
+  --display-name "Manthan triage agent"
+gcloud iam service-accounts create manthan-investigator \
+  --display-name "Manthan investigator agent"
+gcloud iam service-accounts create manthan-advisor \
+  --display-name "Manthan advisor agent"
 
-# Project-level roles: Cloud SQL connector + trace export.
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member "serviceAccount:${SERVICE_ACCOUNT}" --role roles/cloudsql.client
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member "serviceAccount:${SERVICE_ACCOUNT}" --role roles/cloudtrace.agent
+# Project-level roles: Cloud SQL connector + trace export for every SA
+# that touches the DB / emits traces (triage needs neither SQL nor trace,
+# but cloudtrace.agent is harmless and useful once its hop is traced).
+for SA in manthan-runtime manthan-investigator manthan-advisor; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member "serviceAccount:${SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role roles/cloudsql.client
+done
+for SA in manthan-runtime manthan-triage manthan-investigator manthan-advisor; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member "serviceAccount:${SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role roles/cloudtrace.agent
+done
 ```
 
 Secret access is granted **per-secret** in step 5 — do not grant
-project-level `secretmanager.secretAccessor`.
+project-level `secretmanager.secretAccessor`. Run `secrets-bootstrap.sh`
+once per service account (runtime + the three agents) so each agent can
+read only the secrets it is wired to.
 
 ## 3. Cloud SQL (Postgres 16)
 
@@ -164,18 +198,57 @@ What it does, in order: ensures the Artifact Registry repo → builds the
 api/worker image → deploys `manthan-api` (Cloud SQL attached,
 `--set-secrets` for `GOOGLE_API_KEY`, `DATABASE_URL`, the coral source
 secrets and any optional platform secrets) → sets `A2A_PUBLIC_URL` from
-the live api URL → deploys `manthan-worker` (same image, command
-override, `--no-cpu-throttling`, pinned to exactly 1 instance for the
-PG LISTEN/NOTIFY bus) → builds the UI **with the api URL baked in** →
-deploys `manthan-ui` → points the api's `WEB_APP_ORIGIN` (CORS) at the
+the live api URL → deploys the **three agent services** from the same
+image with uvicorn `--command/--args` overrides (`manthan-investigator`
+first with `--no-cpu-throttling` + min 1 instance because investigations
+run in-process past the A2A response; then `manthan-triage` with
+`INVESTIGATOR_A2A_URL` wired; then `manthan-advisor`) → wires the gateway
+(`TRIAGE_A2A_URL`, `ADVISOR_A2A_URL`, `INVESTIGATOR_A2A_URL` on
+`manthan-api`) → deploys `manthan-worker` (actor + prettifier only,
+`--no-cpu-throttling`, pinned to exactly 1 instance for the PG
+LISTEN/NOTIFY action queue) → builds the UI **with the api URL baked in**
+→ deploys `manthan-ui` → points the api's `WEB_APP_ORIGIN` (CORS) at the
 UI URL.
+
+### Agent runtime choice: Agent Engine (preferred) vs Cloud Run (fallback)
+
+The investigator is a pure ADK agent system, which makes **Vertex AI
+Agent Engine the preferred runtime** for it (managed sessions, the
+console's Traces/Sessions/Memory tabs, Agent Registry residency):
+
+```bash
+# from agent/ — requires GOOGLE_GENAI_USE_VERTEXAI=TRUE + a staging bucket
+pip install "google-cloud-aiplatform[adk,agent_engines]"
+adk deploy agent_engine \
+  --project "$PROJECT_ID" --region "$REGION" \
+  --staging_bucket "gs://${PROJECT_ID}-agent-staging" \
+  src/manthan_agent
+```
+
+Two integration notes before flipping to it (why Cloud Run is the
+*working* path today and stays as the fallback):
+
+1. **Coral transport** — on Agent Engine there is no sidecar process, so
+   the stdio `coral mcp-stdio` subprocess must become a streamable-HTTP
+   MCP endpoint (Coral 0.4.2 supports it; run Coral as its own Cloud Run
+   service and point the tools at its URL).
+2. **Event projections** — the in-process runner writes to Cloud SQL via
+   `services.case_store`; on Agent Engine that write path needs the
+   public-IP Cloud SQL connector or a small ingest endpoint on
+   `manthan-api`.
+
+Triage and advisor stay on Cloud Run either way — they are thin
+FastAPI/A2A surfaces, not ADK loops.
 
 ## 7. Configure the Stripe webhook
 
 In the Stripe Dashboard (Developers → Webhooks → Add endpoint), or via CLI:
 
-- **Endpoint URL:** `https://<manthan-api-url>/webhooks/stripe/<TENANT>`
-  (the org slug is part of the path — use your tenant slug)
+- **Endpoint URL (canonical — the triage agent):**
+  `https://<manthan-triage-url>/webhooks/stripe`
+  (back-compat: `https://<manthan-api-url>/webhooks/stripe/<TENANT>` still
+  works — the gateway forwards to triage when `TRIAGE_A2A_URL` is set,
+  else opens the case directly)
 - **Events (exactly these five):**
   1. `charge.dispute.created` (primary trigger)
   2. `charge.dispute.funds_withdrawn`
@@ -184,14 +257,15 @@ In the Stripe Dashboard (Developers → Webhooks → Add endpoint), or via CLI:
   5. `invoice.payment_failed`
 
 Then store the endpoint's signing secret (`whsec_…`) in Secret Manager
-and attach it:
+and attach it (to triage, the canonical receiver — and to the api if you
+keep the back-compat endpoint registered with Stripe too):
 
 ```bash
 echo "STRIPE_WEBHOOK_SECRET=whsec_..." > /tmp/whsec.env
-./secrets-bootstrap.sh "$TENANT" /tmp/whsec.env "$SERVICE_ACCOUNT"
+./secrets-bootstrap.sh "$TENANT" /tmp/whsec.env "manthan-triage@${PROJECT_ID}.iam.gserviceaccount.com"
 rm /tmp/whsec.env
 
-gcloud run services update manthan-api --region "$REGION" \
+gcloud run services update manthan-triage --region "$REGION" \
   --set-secrets "STRIPE_WEBHOOK_SECRET=manthan-${TENANT}-stripe-webhook-secret:latest"
 # (re-running ./deploy.sh also picks it up now that the secret exists)
 ```
@@ -214,26 +288,40 @@ domain, re-run the UI build/deploy with the new
 
 ```bash
 API_URL="$(gcloud run services describe manthan-api --region "$REGION" --format 'value(status.url)')"
+TRIAGE_URL="$(gcloud run services describe manthan-triage --region "$REGION" --format 'value(status.url)')"
+INVESTIGATOR_URL="$(gcloud run services describe manthan-investigator --region "$REGION" --format 'value(status.url)')"
+ADVISOR_URL="$(gcloud run services describe manthan-advisor --region "$REGION" --format 'value(status.url)')"
 
 # Liveness
 curl -fsS "$API_URL/healthz"
 
-# A2A agent card (identity, skills: investigate_dispute + 6 state queries)
-curl -fsS "$API_URL/.well-known/agent-card.json" | python3 -m json.tool
+# Each agent serves its own card with its own identity:
+curl -fsS "$TRIAGE_URL/.well-known/agent-card.json" | python3 -m json.tool        # manthan-triage, route_event
+curl -fsS "$INVESTIGATOR_URL/.well-known/agent-card.json" | python3 -m json.tool  # manthan-investigator, investigate_dispute + 6 reads
+curl -fsS "$ADVISOR_URL/.well-known/agent-card.json" | python3 -m json.tool       # manthan-advisor, ask/precheck_refund/… + 6 reads
+curl -fsS "$API_URL/.well-known/agent-card.json" | python3 -m json.tool           # gateway (aggregate card)
+
+# Ask the advisor something over A2A:
+curl -fsS -X POST "$ADVISOR_URL/a2a" -H 'content-type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "message/send",
+  "params": {"skill": "dispute_exposure", "args": {}}
+}' | python3 -m json.tool
 
 # Fire a test dispute at the deployed webhook (uses your Stripe TEST key):
 stripe trigger charge.dispute.created
 # If your webhook endpoint is in test mode, the event arrives directly.
 # Alternatively forward events from your machine:
-#   stripe listen --forward-to "$API_URL/webhooks/stripe/$TENANT"
+#   stripe listen --forward-to "$TRIAGE_URL/webhooks/stripe"
 #   stripe trigger charge.dispute.created
 
-# Then watch the worker pick it up:
-gcloud run services logs read manthan-worker --region "$REGION" --limit 50
+# Then watch the investigator run the case (in-process, same service):
+gcloud run services logs read manthan-investigator --region "$REGION" --limit 50
 ```
 
-Expected: webhook 200 → triage builds a trigger → a case appears
-(`investigating` → `awaiting_approval`) in the UI inbox.
+Expected: webhook 200 at triage → A2A `investigate_dispute` to the
+investigator → a case appears (`investigating` → `awaiting_approval`) in
+the UI inbox, with events/findings/brief written by the investigator
+itself (no worker hop).
 
 ## 10. Optional: Pub/Sub multi-instance upgrade
 
@@ -256,6 +344,13 @@ cutover steps (handler, publisher, worker max-instances).
   verified against the real GitHub release.
 - **The `/webhooks/pubsub` handler does not exist yet** — `pubsub-setup.sh`
   is a template for the multi-instance upgrade path only.
+- **Agent Engine deployment** — documented in section 6 ("Agent runtime
+  choice") but not scripted; `deploy.sh` ships the Cloud Run fallback for
+  the investigator.
+- **A2A auth between the agents** — the three agent services deploy
+  `--allow-unauthenticated` for the demo; production should flip triage→
+  investigator (and gateway→agents) to ID-token auth between their
+  service accounts.
 - **Clerk** — creating the Clerk app, `CLERK_SECRET_KEY` /
   `VITE_CLERK_PUBLISHABLE_KEY` issuance, and JWT verification key setup.
 - **Stripe webhook creation** — step 7 is manual (dashboard or CLI);
