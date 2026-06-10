@@ -38,32 +38,33 @@ https://github.com/user-attachments/assets/afa2105c-3cc1-40e2-a799-6fcd2ee2f3f8
   <img src="docs/track3/assets/hero.png" alt="Manthan — three agents are the system" width="920" />
 </p>
 
-## The 30-second version
+## What this is
 
-A senior analyst spends **5 hours** on a chargeback. Manthan spends **3 minutes** — and shows its work.
+A senior analyst spends ~5 hours on a chargeback. Manthan spends ~3 minutes.
 
-When a dispute hits Stripe, a **triage agent** frames the case and dispatches an **investigator agent** over A2A. The investigator's coordinator fans out **five specialist agents in parallel** across nine live business systems (via [Coral](https://github.com/withcoral/coral)'s unified SQL plane), records findings with **row-level citations**, and produces a decision brief with the refund math shown. A **policy engine** gates execution behind human approval tiers; a deterministic actor fires the approved actions against real systems. An **advisor agent** answers questions about any case — from operators, or from *other agents* over A2A.
+- A Stripe dispute hits the **triage agent**, which frames the case and dispatches the **investigator agent** over A2A.
+- The investigator's coordinator fans out **five specialists in parallel** across nine business systems (via [Coral](https://github.com/withcoral/coral)) and writes a decision brief — every claim cited to a source record, refund math shown.
+- A **policy engine** gates execution behind human approval tiers; a **deterministic actor** fires approved actions against real systems.
+- An **advisor agent** answers questions about any case — from operators or from other agents over A2A.
 
-On the seeded $8,400 dispute, live: five specialists dispatched in one parallel turn, six cited findings, and the pacer's money-mover gate **rejected the agent's first conclusion** because no finding showed the refund math — the agent derived $8,400 ÷ 30 days × 2 degraded days = **$560**, then concluded at 0.95 confidence. The correct answer, governed in real time.
+Validated live on the seeded $8,400 dispute: 5 specialists in one parallel turn, 6 cited findings, the pacer rejected the first `conclude()` for missing refund math, final decision refund **$560** ($8,400 ÷ 30 × 2 degraded days) at 0.95 confidence.
 
 ## Track 3 compliance map
 
-| Mandate | What we built | Where |
+| Mandate | Implementation | Where |
 |---|---|---|
-| **B2B focus** | Autonomous chargeback/dispute resolution for B2B SaaS merchants — a real money-moving back-office workflow, not a chatbot | [Business case](#the-business-case) |
-| **Cloud-native runtime** | Six Cloud Run services (API gateway, 3 agent services, worker, UI) + Cloud SQL + Secret Manager; Vertex AI Agent Engine documented as the investigator's alternative host | [`deploy/gcp/`](./deploy/gcp) |
-| **Gemini-powered intelligence** | Every reasoning call is Gemini: `gemini-3.1-pro-preview` (coordinator), `gemini-3.5-flash` (specialists + advisor), `gemini-3.1-flash-lite` (triage + prettifier). No other LLM anywhere | [`agent/src/manthan_agent/config.py`](./agent/src/manthan_agent/config.py) |
-| **A2A interoperability** | Three agents publish Agent Cards and speak JSON-RPC A2A; triage→investigator dispatch runs over A2A; 12 skills let external agents investigate, ask, pre-check refunds, and contribute evidence | [`agent/src/manthan_agent/a2a/`](./agent/src/manthan_agent/a2a) |
-| **Multi-agent ADK orchestration** | A coordinator + five parallel specialists (shared Evidence set, AgentTools) inside the investigator; triage / investigator / advisor as separately-identified macro agents | [`agent/src/manthan_agent/team.py`](./agent/src/manthan_agent/team.py) |
-| **Grounding + RAG** | Private-data grounding via Coral SQL over 9 SaaS systems · RAG over merchant policy docs (Notion / Confluence / Docs — whichever the catalog shows) · ADK built-in `google_search` grounding for card-network evidence rules | [Grounding & RAG](#grounding--rag) |
-| **Agent Identity** | One service account per agent; identity block (agent id, SA, model, signing fingerprint) published on every Agent Card and rendered in the product's Agent Roster | [`deploy/gcp/deploy.sh`](./deploy/gcp/deploy.sh) |
-| **Collaboration > single agent** | Parallel specialists with scoped prompts + per-source schemas; specialist failures degrade instead of aborting; an external-agent skill surface a single agent could not offer | [Multi-agent](#a-multi-agent-system-not-a-chatbot) |
+| **B2B focus** | Chargeback/dispute resolution for B2B SaaS merchants — a money-moving back-office workflow | [Business case](#the-business-case) |
+| **Cloud-native runtime** | Six Cloud Run services + Cloud SQL + Secret Manager; Agent Engine documented for the investigator | [`deploy/gcp/`](./deploy/gcp) |
+| **Gemini-powered intelligence** | All reasoning on Gemini: 3.1-pro (coordinator) · 3.5-flash (specialists, advisor) · 3.1-flash-lite (triage, prettifier) | [`agent/.../config.py`](./agent/src/manthan_agent/config.py) |
+| **A2A interoperability** | Three Agent Cards, JSON-RPC `/a2a`, triage→investigator over A2A, 12 skills for external agents | [`agent/.../a2a/`](./agent/src/manthan_agent/a2a) |
+| **Multi-agent ADK orchestration** | Coordinator + five parallel specialists (shared Evidence set); triage / investigator / advisor as identified macro agents | [`agent/.../team.py`](./agent/src/manthan_agent/team.py) |
+| **Grounding + RAG** | Private data via Coral SQL · RAG over merchant policy docs · `google_search` for card-network rules | [Grounding & RAG](#grounding--rag) |
+| **Agent Identity** | One service account per agent; identity block on every Agent Card; rendered in the Agent Roster | [`deploy/gcp/deploy.sh`](./deploy/gcp/deploy.sh) |
+| **Collaboration > single agent** | Scoped parallel specialists; failures degrade, never abort; external agents join cases over A2A | [Multi-agent](#a-multi-agent-system-not-a-chatbot) |
 
 ## Coral — the retrieval layer
 
-The hardest problem in a dispute isn't reasoning — it's **retrieval**. The facts that decide a chargeback live in nine different systems of record: the charge in Stripe, the account in the CRM, the complaint in the support desk, the outage in the observability stack, the refund formula in the policy docs. Manthan's answer is [**Coral**](https://github.com/withcoral/coral) — an open-source (Apache-2.0) Rust engine that exposes SaaS APIs as **Postgres-compatible SQL schemas** behind a single [MCP](https://modelcontextprotocol.io) server.
-
-The default agent pattern is one tool call per source: fetch the dispute, fetch the company, fetch the incidents, then ask the model to stitch JSON in its head. Every stitch is a place to hallucinate, and every round-trip burns a turn. With Coral, retrieval is a query plan instead of a reasoning chore:
+Dispute facts live in nine systems of record: the charge in Stripe, the account in the CRM, the complaint in support, the outage in observability, the refund formula in the policy docs. [**Coral**](https://github.com/withcoral/coral) (Apache-2.0, Rust) exposes them as **Postgres-compatible SQL schemas behind one MCP server** — retrieval becomes a query plan instead of per-vendor tool calls stitched together in the model's context:
 
 ```sql
 SELECT
@@ -85,42 +86,46 @@ JOIN stripe.customers c  ON c.id  = d.customer
 WHERE d.id = 'dp_aperture_345478';
 ```
 
-One query. One round-trip. One rowset with everything the brief needs.
+One query, one round-trip, one rowset. Why it's the right grounding layer:
 
-Why this is the right grounding layer for an agent system:
+- **Live system-of-record data** — queried at decision time, not embeddings of a stale copy. No ETL, no index drift.
+- **Structural provenance** — every row carries source/table/record id; row-level citations are free and clickable.
+- **Joins beat tool-call chains** — cross-system correlation happens in the query engine, not in the context window.
+- **The provider is a slot** — 170+ adapters upstream, nine connected here. HubSpot *or* Salesforce, Intercom *or* Zendesk, Notion *or* Confluence: same SQL surface, discovered from the catalog at run time.
+- **Read-only by design** — the retrieval plane cannot write; actions go through the actor after approval.
+- **Credentials stay with Coral** — per-tenant secrets, used at query time. The model sees rows, never keys.
 
-- **Live system-of-record data, not embeddings of a stale copy.** Classic RAG retrieves from a vector index that was true at ingestion time. A dispute needs the *current* charge status and the *current* policy page — Coral queries the upstream API at decision time, so freshness is structural. No ETL pipeline, no index drift, nothing to re-sync.
-- **Provenance comes built in.** Every row carries its source, table, and record id, so **row-level citations are free** — each finding cites the Evidence rows it rests on, and each citation chip deep-links to the actual record. Grounding you can click.
-- **Joins beat tool-call chains.** Cross-system correlation ("was there an incident during the disputed window for *this* customer's service?") happens in the query engine, deterministically — not in the model's context window, probabilistically.
-- **The provider is a slot, not a dependency.** Coral has 170+ source adapters upstream; this deployment connects nine. CRM may be HubSpot *or* Salesforce, support Intercom *or* Zendesk, policy docs Notion *or* Confluence — same SQL surface either way, and the specialists discover what's connected from the catalog at run time.
-- **Read-only by design.** Coral is a read layer — the retrieval plane physically cannot write. Actions go through the deterministic actor after human approval, so the grounding/action separation is enforced by architecture, not by prompt.
-- **Credentials stay in the merchant's boundary.** Source keys live with the Coral process (per-tenant secrets in Secret Manager on GCP) and are used only at query time. The model sees rows, never keys.
-
-**The token bill is an architecture decision.**
+### The token bill is an architecture decision
 
 <p align="center">
   <img src="docs/track3/assets/coral.png" alt="The bill is an architecture decision — per-source tool calls vs one SQL surface" width="920" />
 </p>
 
-The naive agent build — one MCP server per vendor, a planner picking tool calls — fails on economics before it fails on capability. Every tool result gets appended to a context that every later turn re-reads, so cost grows **quadratically**: a ten-step loop pays roughly **43× the single-call estimate**. Each vendor MCP also ships its own tool catalog the model re-buys every turn, and malformed-call retries quietly tax another 10–20% of the budget. This is the "token tsunami" that is killing agentic projects with working AI.
+- Per-vendor MCP chains re-read the whole context every turn → **quadratic cost** (~43× a single-call estimate by step ten), plus per-vendor tool catalogs re-bought every turn and a 10–20% malformed-call retry tax.
+- Coral's discipline: **one query language** · **discover-then-query** (catalog walked at case start, no schema dump in the prompt) · **typed rows** · constrained call generation (malformed calls can't be produced).
+- Coral's published 82-task benchmark vs direct vendor MCPs: **31% more accurate · 64% fewer tokens · 70% cheaper · 55% faster**. Worked example: 29 tool calls / 134 s via vendor MCPs → 1 query, 6 calls / 21 s via Coral.
 
-Coral's discipline spends those tokens on reasoning instead of protocol: **one query language** (one mental model, not thirty tool schemas), **discover-then-query** (the agent walks the catalog at case start and pays only for the sources this case actually has — no schema dump in the system prompt), **typed rows instead of prose**, and constrained tool-call generation so a malformed call can't be produced at all. Coral's published benchmark — 82 real-world tasks against direct vendor MCPs (Datadog, Sentry, Linear, Slack, GitHub) — measured **31% more accurate, 64% more token-efficient, 70% cheaper, 55% faster** on complex tasks; their worked example ("what label groups do we use?") takes 29 tool calls and 134 seconds through vendor MCPs versus one SQL query, 6 calls, 21 seconds through Coral. Same data, same model — the architecture decides the bill. For a per-case service business, that's the difference between a unit margin and a loss.
-
-In the system, the coordinator and the four data specialists share one Coral MCP session (`coral_sql`, `coral_list_catalog`, `coral_describe_table`); every query is recorded as an event, and the Workspace's Coral mode shows the raw SQL feed beside the narrative.
+Same data, same model — the architecture decides the bill. The coordinator and the four data specialists share one Coral MCP session (`coral_sql`, `coral_list_catalog`, `coral_describe_table`); every query is recorded as an event and visible as raw SQL in the Workspace's Coral mode.
 
 ## The business case
 
-Card networks gave merchants a losing game: disputes arrive with deadlines, evidence requirements vary by network and reason code, and the facts are scattered across payments, CRM, support, observability, and policy docs. Most B2B SaaS teams either eat the loss (revenue leakage) or burn analyst hours reconstructing what happened (a senior analyst, ~5 hours per chargeback).
+Disputes arrive with deadlines, evidence requirements vary by network and reason code, and the facts span payments, CRM, support, observability, and policy docs. Teams either eat the loss or burn analyst hours reconstructing what happened.
 
-Manthan turns that into a 3-minute, evidence-grounded decision: **fight** with network-compliant evidence, **refund** the correctly-computed amount (including partial pro-rata credits the customer is actually owed), **accept**, or **escalate** to a human with the tradeoff named. Every dollar decision is gated by policy (auto < $50 · one-click $50–500 · two-person $500+) and lands with a full audit trail.
+Manthan returns one of four decisions — **fight** (network-compliant evidence) · **refund** (correctly-computed amount, including partial pro-rata credits) · **accept** · **escalate** (tradeoff named) — gated by policy (auto < $50 · one-click $50–500 · two-person $500+), with a full audit trail.
 
-And the forward story: as buyers become agents (AP2), disputes become agent-to-agent conversations. Manthan's A2A surface *is* the merchant's side of that conversation — a CS agent pre-checks refunds against it, a CFO agent reads exposure from it, and any enterprise agent can open or interrogate a case.
+As buyers become agents (AP2), disputes become agent-to-agent conversations — Manthan's A2A surface is the merchant's side of that conversation.
 
 ## A multi-agent system, not a chatbot
 
 <p align="center">
   <img src="docs/track3/assets/team.png" alt="The investigator is a team — coordinator + five parallel specialists over one evidence set" width="860" />
 </p>
+
+- **Scoped specialists, run in parallel** — payments thinks in `stripe.*` joins, reliability correlates incidents with the disputed window, policy retrieves the authoritative SOP. Wall-clock ≈ the slowest specialist, not the sum.
+- **One shared Evidence set** — specialists write into it; the coordinator's citations stay globally indexed.
+- **An honest boundary** — ADK's built-in `google_search` can't mix with function tools, so the network-rules analyst is necessarily its own agent.
+- **Failures degrade, never abort** — `ResilientAgentTool` caps each specialist at 180 s; a 503-storm or hung connection becomes an error result the coordinator routes around.
+- **Governed reasoning** — the pacer (pure rules as ADK `before_model` / `before_tool` callbacks) nudges drift and refuses to finalize a refund whose math no finding shows. It rejected the first `conclude()` in the validation run.
 
 <details>
 <summary><strong>Full topology (text)</strong> — every service, gate, and adapter</summary>
@@ -174,27 +179,17 @@ And the forward story: as buyers become agents (AP2), disputes become agent-to-a
 
 </details>
 
-**Why the team beats one agent.** Each specialist carries a focused prompt and a scoped slice of the catalog — the payments analyst thinks in `stripe.*` joins, the reliability analyst correlates incidents with the disputed window, the policy analyst retrieves the *authoritative* SOP and quotes its formula. They run **in parallel** (wall-clock ≈ the slowest specialist, not the sum), write into **one shared Evidence set** so the coordinator's citations stay globally indexed, and report structured summaries the coordinator synthesizes. The constraint is honest too: ADK's built-in `google_search` cannot be mixed with function tools on one agent — the network-rules analyst *must* be its own agent, which is exactly the kind of boundary multi-agent design exists for.
-
-**Resilience is part of the orchestration.** Specialists are wrapped in a `ResilientAgentTool` (180s wall-clock cap): a model 503-storm or a hung connection on one specialist degrades to an error result the coordinator routes around — observed killing whole investigations before the wrap, survivable after it.
-
-**Governed reasoning, on camera.** The pacer — pure rules wired as ADK `before_model` / `before_tool` callbacks — nudges the coordinator when it drifts (source unqueried, repeated query, no findings late) and **refuses to finalize a refund whose math no finding shows** (the C1 money-mover gate). In the live validation run it rejected the agent's first `conclude()`, the agent recorded the pro-rata derivation, and only then did the brief land.
-
 ## Grounding & RAG
 
 <p align="center">
   <img src="docs/track3/assets/grounding.png" alt="Three grounding surfaces — Coral SQL, policy-docs RAG, Google Search" width="860" />
 </p>
 
-Three grounding surfaces, each doing a different job:
-
-**1 · Private-data grounding — Coral.** Nine systems of record as one SQL surface — [covered in depth above](#coral--the-retrieval-layer). Every query lands as an Evidence row with full provenance; every finding must cite Evidence indices; every citation chip deep-links to the underlying record. If it's in the brief, it's in a source.
-
-**2 · RAG over merchant policy.** The policy analyst retrieves the merchant's own SOPs from wherever they actually live — Notion, Confluence, Google Docs; it discovers the connected docs schema from the catalog at run time (search → page → formula). Decisions follow *documented* policy — "two degraded days in a thirty-day cycle" comes from the merchant's pro-rata credit page, quoted and cited, not from model priors.
-
-**The provider is a slot, not a dependency.** CRM may be HubSpot *or* Salesforce, support Intercom *or* Zendesk, policy docs Notion *or* Confluence — Coral exposes whichever is connected as the same SQL schema, and the specialists discover what this merchant actually runs from the catalog instead of assuming a stack.
-
-**3 · Google Search grounding.** The network-rules analyst grounds card-network evidence requirements (e.g. Visa Compelling Evidence 3.0 for the dispute's reason code) via ADK's built-in `google_search` — rules that change too often to hardcode, retrieved fresh when a *fight* brief needs them.
+| Surface | What | How |
+|---|---|---|
+| **Private data — Coral** | Nine systems of record as one SQL surface ([above](#coral--the-retrieval-layer)) | Every query → Evidence row with provenance; findings cite Evidence indices; chips deep-link to the record |
+| **RAG — merchant policy** | The policy analyst retrieves the merchant's own SOPs — Notion, Confluence, or Google Docs, discovered from the catalog | Search → page → formula; "two degraded days in a thirty-day cycle" is quoted from the merchant's policy page, not model priors |
+| **Google Search — network rules** | Card-network evidence requirements (e.g. Visa CE 3.0 per reason code) via ADK's built-in `google_search` | Rules change too often to hardcode; retrieved fresh when a *fight* brief needs them |
 
 ## A2A interoperability
 
@@ -202,20 +197,19 @@ Three grounding surfaces, each doing a different job:
   <img src="docs/track3/assets/a2a.png" alt="Any agent can work with Manthan — A2A agent card + JSON-RPC, 12 skills" width="860" />
 </p>
 
-Three Agent Cards (`/.well-known/agent-card.json` on each service), JSON-RPC at `/a2a`, API-key security scheme declared. The communication layer between our own agents is A2A (triage → investigator dispatch), and the same surface is open to *any* enterprise agent — **12 skills**:
+Three Agent Cards (`/.well-known/agent-card.json` per service), JSON-RPC at `/a2a`, API-key security scheme. A2A is also the internal communication layer (triage → investigator). **12 skills**:
 
 | | Skill | What another agent can do |
 |---|---|---|
-| **Act** | `investigate_dispute` | Open a full investigation (also the triage→investigator hop) |
-| | `contribute_evidence` | Push evidence into an open case — e.g. a CS agent attaches its chat transcript; provenance tagged with the contributor's identity |
-| **Advise** | `ask` | Ask anything about a case — grounded, citation-bearing answer |
-| | `precheck_refund` | "Customer X wants $Y back — what do we know?" → history, risk, recommended path *before* granting a refund |
-| | `get_customer_history` | Episodic memory by customer: prior disputes, outcomes |
-| | `dispute_exposure` | Open exposure aggregates for finance/CFO agents |
-| **Read** | `get_case` · `list_cases` · `get_brief` · `get_findings` · `get_actions` · `get_audit_trail` | Every case artifact is pickup-able — state is never locked in the UI |
+| **Act** | `investigate_dispute` | Open a full investigation |
+| | `contribute_evidence` | Push evidence into an open case, provenance tagged with the contributor's identity |
+| **Advise** | `ask` | Grounded, citation-bearing Q&A over a case or the portfolio |
+| | `precheck_refund` | History + risk + approval gate *before* granting a refund |
+| | `get_customer_history` | Prior disputes and outcomes by customer |
+| | `dispute_exposure` | Open-exposure aggregates for finance agents |
+| **Read** | `get_case` · `list_cases` · `get_brief` · `get_findings` · `get_actions` · `get_audit_trail` | Every case artifact — state is never locked in the UI |
 
 ```sh
-# Any A2A client, no SDK required:
 curl -s https://<advisor-url>/.well-known/agent-card.json
 curl -s -X POST https://<advisor-url>/a2a -H 'content-type: application/json' -d '{
   "jsonrpc": "2.0", "id": 1, "method": "message/send",
@@ -225,11 +219,11 @@ curl -s -X POST https://<advisor-url>/a2a -H 'content-type: application/json' -d
 
 ## Governed by design
 
-- **Agent Identity** — each agent runs as its own service account; the card publishes agent id, SA, model, and signing fingerprint; the product's **Agent Roster** (`/app/agents`) renders the same identity block operators see in the GCP console.
-- **HITL policy gates** — the policy engine decides auto / one-click / two-person per amount and account; the agent *proposes*, humans *approve*, and the **deterministic actor** executes with idempotency keys. The LLM never holds write credentials.
-- **Honest failure** — when an upstream rejects an action (Stripe `charge_disputed`, Slack `channel_not_found`), it's recorded as `failed` with the verbatim error; we never synthesize a success ref.
-- **Observability** — OpenTelemetry end to end (Cloud Trace exporter via the agent's `gcp` extra); live span-tree per case in `/app/traces`; every event carries trace ids.
-- **Audit** — append-only event log per case; `get_audit_trail` exposes it over A2A; the UI's audit view renders it day-grouped.
+- **Agent Identity** — one service account per agent; agent id, SA, model, and signing fingerprint on every card; rendered in the Agent Roster (`/app/agents`).
+- **HITL policy gates** — auto / one-click / two-person by amount and account. The agent proposes, humans approve, the deterministic actor executes with idempotency keys. The LLM never holds write credentials.
+- **Honest failure** — upstream rejections are recorded as `failed` with the verbatim error; no synthesized success refs.
+- **Observability** — OpenTelemetry end to end; Cloud Trace exporter; live span-tree per case (`/app/traces`); trace ids on every event.
+- **Audit** — append-only event log per case, exposed over A2A (`get_audit_trail`) and in the UI.
 
 ## Quick start
 
@@ -237,7 +231,7 @@ curl -s -X POST https://<advisor-url>/a2a -H 'content-type: application/json' -d
 - Node 20+ · `pnpm` or `npm`
 - Python 3.12+ · [`uv`](https://github.com/astral-sh/uv)
 - Docker (for the local Postgres)
-- The [Coral binary](https://github.com/withcoral/coral) built and on your `PATH` (or pointed at via `CORAL_BINARY`)
+- The [Coral binary](https://github.com/withcoral/coral) on your `PATH` (or set `CORAL_BINARY`)
 
 ### Setup
 ```sh
@@ -254,14 +248,14 @@ cp agent/.env.example agent/.env
 # 2 · Database
 docker compose -f manthan-api/docker-compose.yml up -d postgres
 
-# 3 · Backend - the API gateway (opens cases and runs investigations
-#     in-process in local dev) + the deterministic workers (actor + prettifier)
+# 3 · Backend - API gateway (runs investigations in-process in local dev)
+#     + deterministic workers (actor + prettifier)
 cd manthan-api && uv sync
 uv run uvicorn manthan_api.main:app --reload --port 8000 &
 uv run python -m manthan_api.workers.main &
 
-#     Optional - run the three A2A agent services separately for full
-#     cloud parity (each serves its own agent card):
+#     Optional - the three A2A agent services as separate processes
+#     (full cloud parity; each serves its own agent card):
 # uv run uvicorn manthan_api.agents.triage:app --port 8001 &
 # uv run uvicorn manthan_api.agents.investigator:app --port 8002 &
 # uv run uvicorn manthan_api.agents.advisor:app --port 8003 &
@@ -270,34 +264,33 @@ uv run python -m manthan_api.workers.main &
 cd ../manthan-ui && npm install && npm run dev
 ```
 
-Visit **[http://localhost:5173](http://localhost:5173)** and sign in via Clerk. Fire a case by sending a Stripe `charge.dispute.created` test event to `/webhooks/stripe/{org}` (e.g. `stripe trigger charge.dispute.created`), or ask the agent over A2A: `POST /a2a` with skill `investigate_dispute`. The canonical seeded case — an $8,400 dispute that resolves to a $560 pro-rata credit — is dispute `du_1Tch1O…` in the test-mode Stripe account.
+Visit [http://localhost:5173](http://localhost:5173), sign in via Clerk. Fire a case with `stripe trigger charge.dispute.created` (webhook: `/webhooks/stripe/{org}`) or over A2A with the `investigate_dispute` skill. The canonical seeded case — $8,400 dispute → $560 pro-rata credit — is `du_1Tch1O…` in the test-mode Stripe account.
 
-**Tests** — pure-logic, no LLM spend: `cd agent && uv run pytest` (79) · `cd manthan-api && uv run pytest` (71).
+Tests (pure-logic, no LLM spend): `cd agent && uv run pytest` (79) · `cd manthan-api && uv run pytest` (71).
 
 ## Deploy on Google Cloud
 
-**Google Cloud is the supported path** — the full runbook, Dockerfiles, and bootstrap scripts live in [`deploy/gcp/`](./deploy/gcp):
+Runbook, Dockerfiles, and scripts in [`deploy/gcp/`](./deploy/gcp):
 
-- **Cloud Run** — six services from two images: API gateway, `manthan-triage`, `manthan-investigator`, `manthan-advisor` (each agent under its **own service account**), the deterministic worker, and the UI.
-- **Cloud SQL Postgres** — the five schema migrations applied by `sql-migrate.sh`.
-- **Secret Manager** — per-tenant `coral-{tenant}-{credential}` secrets with **per-secret IAM**, bootstrapped by `secrets-bootstrap.sh`.
-- **Cloud Trace** — the agent's OTel exporter; spans for every model call, tool call, and specialist.
-- **Vertex AI Agent Engine** — documented alternative host for the investigator (same ADK code, Vertex backend flag); Cloud Run is the working default.
-- **Coral sidecar** — Coral 0.4.2 over streamable-HTTP MCP in the cloud (local dev spawns `coral mcp-stdio` per investigation).
+- **Cloud Run** — six services from two images: API gateway, `manthan-triage`, `manthan-investigator`, `manthan-advisor` (each under its own service account), worker, UI.
+- **Cloud SQL Postgres** — five migrations via `sql-migrate.sh`.
+- **Secret Manager** — per-tenant `coral-{tenant}-{credential}` secrets, per-secret IAM, via `secrets-bootstrap.sh`.
+- **Cloud Trace** — OTel spans for every model call, tool call, and specialist.
+- **Vertex AI Agent Engine** — documented alternative host for the investigator (same ADK code, Vertex backend flag).
+- **Coral sidecar** — Coral 0.4.2 over streamable-HTTP MCP in the cloud; local dev spawns `coral mcp-stdio` per investigation.
 
 ## How a case runs
 
 | Stage | What happens |
 |---|---|
-| **1 · Trigger** | A Stripe webhook (5 event types: `charge.dispute.created` · `charge.dispute.funds_withdrawn` · `charge.dispute.closed` · `radar.early_fraud_warning.created` · `invoice.payment_failed`) hits the triage agent — or an external agent calls `investigate_dispute`. |
-| **2 · Investigate** | Triage dispatches the investigator over A2A. The coordinator fans out the five specialists in parallel; evidence accumulates with provenance; the pacer governs every round. |
-| **3 · Brief** | A two-paragraph executive memo with the math shown, every number cited — written straight to Postgres by the investigator itself (no pipeline worker in between). |
-| **4 · Decide** | Refund / fight / accept / escalate + the complete drafted action set (Stripe refund, dispute response, customer email, HubSpot note, Slack post), gated by policy tier. |
-| **5 · Approve & act** | One click. The actor fires each action against real systems with idempotency keys and verbatim-error honesty. The advisor answers follow-up questions — from the operator or over A2A. |
+| **1 · Trigger** | Stripe webhook (`charge.dispute.created` · `funds_withdrawn` · `closed` · `radar.early_fraud_warning.created` · `invoice.payment_failed`) hits triage — or an external agent calls `investigate_dispute` |
+| **2 · Investigate** | Triage dispatches the investigator over A2A; coordinator fans out five specialists in parallel; pacer governs every round |
+| **3 · Brief** | Executive memo, math shown, every number cited — written straight to Postgres by the investigator |
+| **4 · Decide** | Refund / fight / accept / escalate + the drafted action set, gated by policy tier |
+| **5 · Approve & act** | One click; the actor fires actions with idempotency keys; the advisor answers follow-ups |
 
 ## Tech stack
 
-**Models** (all Gemini, via AI Studio — `GOOGLE_API_KEY`)
 | Role | Model |
 |---|---|
 | Investigator coordinator | `gemini-3.1-pro-preview` |
@@ -305,23 +298,21 @@ Visit **[http://localhost:5173](http://localhost:5173)** and sign in via Clerk. 
 | Triage + prettifier | `gemini-3.1-flash-lite` |
 | Action execution (actor) | deterministic — no model |
 
-**Agent** · [`agent/`](./agent) — [Google ADK](https://google.github.io/adk-docs/) (`google-adk` 2.x): coordinator + five specialists as AgentTools over one shared Evidence set; tools `coral_sql` / `coral_list_catalog` / `coral_describe_table` (read, via Coral MCP) and `record_finding` / `ask_human` / `conclude` (coordinator-only); pacer as ADK callbacks; OpenTelemetry throughout. See [`agent/README.md`](./agent/README.md).
+All Gemini via AI Studio (`GOOGLE_API_KEY`).
 
-**Backend** · [FastAPI](https://fastapi.tiangolo.com) + [asyncpg](https://github.com/MagicStack/asyncpg) + [PostgreSQL](https://www.postgresql.org) · three A2A agent services + 2 deterministic workers (`FOR UPDATE SKIP LOCKED`).
-
-**Frontend** · React 19 + Vite + TypeScript · Tailwind v4 · Clerk auth · an editorial UI (Spectral serif, hairline rules, brand-colored source pills) with agent observability pages: Roster (`/app/agents`), Traces (`/app/traces`), Controls (`/app/controls`).
-
-**Data plane** · [Coral](https://github.com/withcoral/coral) — Rust binary, 9 SaaS schemas as Postgres SQL over MCP.
-
-**Write adapters** (actor-only, after approval) · Stripe refunds + dispute evidence · Resend branded emails · HubSpot notes · Slack posts · Notion resolution blocks.
+- **Agent** — [Google ADK](https://google.github.io/adk-docs/) 2.x: coordinator + five specialists as AgentTools over one Evidence set; coral tools (read) + `record_finding` / `ask_human` / `conclude` (coordinator-only); pacer as callbacks; OpenTelemetry throughout. Details: [`agent/README.md`](./agent/README.md).
+- **Backend** — FastAPI + asyncpg + PostgreSQL; three A2A agent services + two deterministic workers (`FOR UPDATE SKIP LOCKED`).
+- **Frontend** — React 19 + Vite + TypeScript, Tailwind v4, Clerk auth; observability pages: Roster (`/app/agents`), Traces (`/app/traces`), Controls (`/app/controls`).
+- **Data plane** — Coral: Rust binary, 9 SaaS schemas as Postgres SQL over MCP.
+- **Write adapters** (actor-only, post-approval) — Stripe refunds + dispute evidence, Resend emails, HubSpot notes, Slack posts, Notion blocks.
 
 ## Repo map
 
-| Path | What lives there |
+| Path | Contents |
 |---|---|
-| [`agent/`](./agent) | The ADK multi-agent brain + A2A protocol layer (cards, dispatch, client, store) |
-| [`manthan-api/`](./manthan-api) | API gateway, the three agent services, case store, policy engine, actor |
-| [`manthan-ui/`](./manthan-ui) | The merchant product + agent observability surfaces |
+| [`agent/`](./agent) | ADK multi-agent brain + A2A protocol layer (cards, dispatch, client, store) |
+| [`manthan-api/`](./manthan-api) | API gateway, three agent services, case store, policy engine, actor |
+| [`manthan-ui/`](./manthan-ui) | Merchant product + agent observability surfaces |
 | [`deploy/gcp/`](./deploy/gcp) | Cloud Run / Cloud SQL / Secret Manager runbook + scripts |
 | [`docs/track3/SUBMISSION.md`](./docs/track3/SUBMISSION.md) | Hackathon submission write-up |
 
