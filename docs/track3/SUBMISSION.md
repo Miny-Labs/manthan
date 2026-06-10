@@ -8,6 +8,9 @@ This file maps each judging criterion to what exists in the repo. Items
 marked `TODO` are the remaining human steps (mostly portal clicks and
 live runs) — the code/scripts behind them are already in place.
 
+<p align="center"><img src="assets/hero.png" alt="Architecture — three agents are the system" width="900" /></p>
+<p align="center"><img src="assets/team.png" alt="Investigator team — coordinator + five parallel specialists" width="900" /></p>
+
 ## 0. The system in one paragraph (current architecture)
 
 Three A2A macro agents are the system
