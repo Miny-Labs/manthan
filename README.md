@@ -40,14 +40,14 @@ https://github.com/user-attachments/assets/afa2105c-3cc1-40e2-a799-6fcd2ee2f3f8
 
 ## What this is
 
-A senior analyst spends ~5 hours on a chargeback. Manthan spends ~3 minutes.
+When a B2B SaaS merchant gets a chargeback, the truth is scattered: the charge lives in Stripe, the account in the CRM, the complaint in the support desk, the outage that caused it in observability, the refund formula in the policy docs. Someone has to read all of it, apply the documented policy, compute what's actually owed, and respond before the card network's deadline. A senior analyst spends ~5 hours per dispute doing exactly that — or the merchant eats the loss.
 
-- A Stripe dispute hits the **triage agent**, which frames the case and dispatches the **investigator agent** over A2A.
-- The investigator's coordinator fans out **five specialists in parallel** across nine business systems (via [Coral](https://github.com/withcoral/coral)) and writes a decision brief — every claim cited to a source record, refund math shown.
-- A **policy engine** gates execution behind human approval tiers; a **deterministic actor** fires approved actions against real systems.
-- An **advisor agent** answers questions about any case — from operators or from other agents over A2A.
+Manthan is that analyst, rebuilt as a team of agents that finishes in ~3 minutes:
 
-Validated live on the seeded $8,400 dispute: 5 specialists in one parallel turn, 6 cited findings, the pacer rejected the first `conclude()` for missing refund math, final decision refund **$560** ($8,400 ÷ 30 × 2 degraded days) at 0.95 confidence.
+- The **triage agent** receives the Stripe dispute (or an `investigate_dispute` call from another agent), frames the case, and dispatches the investigator over A2A.
+- The **investigator agent** — a coordinator commanding **five specialists in parallel** — reads across nine business systems via [Coral](https://github.com/withcoral/coral) SQL and writes a decision brief: **fight, refund, accept, or escalate**, with the math shown and every claim cited to the source record it came from.
+- The agent only ever *proposes*. A **policy engine** routes each decision to its human approval tier, and a **deterministic actor** executes the approved actions — refund, dispute response, customer email — with idempotency keys. The LLM never holds write credentials.
+- The **advisor agent** answers questions about any case — for operators, and for other agents over A2A.
 
 ## Track 3 compliance map
 
