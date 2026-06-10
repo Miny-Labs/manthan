@@ -6,8 +6,6 @@
 
 <p align="center">
   The autonomous multi-agent investigator for B2B billing disputes.
-  <br />
-  A chargeback hits Stripe → three Gemini-powered agents investigate, decide, and act — governed, cited, human-gated.
   <br /><br />
   <strong>Track 3 submission · Google for Startups AI Agents Challenge</strong>
   <br />
@@ -24,6 +22,7 @@
 
 <p align="center">
   <a href="#track-3-compliance-map"><strong>Compliance map</strong></a> ·
+  <a href="#coral--the-retrieval-layer"><strong>Coral</strong></a> ·
   <a href="#the-business-case"><strong>Business case</strong></a> ·
   <a href="#a-multi-agent-system-not-a-chatbot"><strong>Multi-agent</strong></a> ·
   <a href="#grounding--rag"><strong>Grounding & RAG</strong></a> ·
@@ -59,6 +58,45 @@ On the seeded $8,400 dispute, live: five specialists dispatched in one parallel 
 | **Grounding + RAG** | Private-data grounding via Coral SQL over 9 SaaS systems · RAG over merchant policy docs (Notion / Confluence / Docs — whichever the catalog shows) · ADK built-in `google_search` grounding for card-network evidence rules | [Grounding & RAG](#grounding--rag) |
 | **Agent Identity** | One service account per agent; identity block (agent id, SA, model, signing fingerprint) published on every Agent Card and rendered in the product's Agent Roster | [`deploy/gcp/deploy.sh`](./deploy/gcp/deploy.sh) |
 | **Collaboration > single agent** | Parallel specialists with scoped prompts + per-source schemas; specialist failures degrade instead of aborting; an external-agent skill surface a single agent could not offer | [Multi-agent](#a-multi-agent-system-not-a-chatbot) |
+
+## Coral — the retrieval layer
+
+The hardest problem in a dispute isn't reasoning — it's **retrieval**. The facts that decide a chargeback live in nine different systems of record: the charge in Stripe, the account in the CRM, the complaint in the support desk, the outage in the observability stack, the refund formula in the policy docs. Manthan's answer is [**Coral**](https://github.com/withcoral/coral) — an open-source (Apache-2.0) Rust engine that exposes SaaS APIs as **Postgres-compatible SQL schemas** behind a single [MCP](https://modelcontextprotocol.io) server.
+
+The default agent pattern is one tool call per source: fetch the dispute, fetch the company, fetch the incidents, then ask the model to stitch JSON in its head. Every stitch is a place to hallucinate, and every round-trip burns a turn. With Coral, retrieval is a query plan instead of a reasoning chore:
+
+```sql
+SELECT
+  d.id AS dispute_id, d.amount, d.reason, d.evidence_due_by,
+  c.email AS customer_email,
+  (SELECT COUNT(*) FROM stripe.disputes
+     WHERE customer = d.customer AND id <> d.id)            AS prior_disputes,
+  (SELECT COUNT(*) FROM intercom.conversations
+     WHERE source_author_email = c.email)                   AS support_threads,
+  (SELECT COUNT(*) FROM datadog.incidents
+     WHERE service = 'custom-reports-svc'
+       AND window @> tstzrange(ch.created, ch.created + interval '7 days'))
+                                                            AS incidents_in_window,
+  (SELECT body FROM notion.pages
+     WHERE title ILIKE '%pro-rata credit%' AND active)      AS policy_body
+FROM stripe.disputes d
+JOIN stripe.charges   ch ON ch.id = d.charge_id
+JOIN stripe.customers c  ON c.id  = d.customer
+WHERE d.id = 'dp_aperture_345478';
+```
+
+One query. One round-trip. One rowset with everything the brief needs.
+
+Why this is the right grounding layer for an agent system:
+
+- **Live system-of-record data, not embeddings of a stale copy.** Classic RAG retrieves from a vector index that was true at ingestion time. A dispute needs the *current* charge status and the *current* policy page — Coral queries the upstream API at decision time, so freshness is structural. No ETL pipeline, no index drift, nothing to re-sync.
+- **Provenance comes built in.** Every row carries its source, table, and record id, so **row-level citations are free** — each finding cites the Evidence rows it rests on, and each citation chip deep-links to the actual record. Grounding you can click.
+- **Joins beat tool-call chains.** Cross-system correlation ("was there an incident during the disputed window for *this* customer's service?") happens in the query engine, deterministically — not in the model's context window, probabilistically.
+- **The provider is a slot, not a dependency.** Coral has 170+ source adapters upstream; this deployment connects nine. CRM may be HubSpot *or* Salesforce, support Intercom *or* Zendesk, policy docs Notion *or* Confluence — same SQL surface either way, and the specialists discover what's connected from the catalog at run time.
+- **Read-only by design.** Coral is a read layer — the retrieval plane physically cannot write. Actions go through the deterministic actor after human approval, so the grounding/action separation is enforced by architecture, not by prompt.
+- **Credentials stay in the merchant's boundary.** Source keys live with the Coral process (per-tenant secrets in Secret Manager on GCP) and are used only at query time. The model sees rows, never keys.
+
+In the system, the coordinator and the four data specialists share one Coral MCP session (`coral_sql`, `coral_list_catalog`, `coral_describe_table`); every query is recorded as an event, and the Workspace's Coral mode shows the raw SQL feed beside the narrative.
 
 ## The business case
 
@@ -140,29 +178,7 @@ And the forward story: as buyers become agents (AP2), disputes become agent-to-a
 
 Three grounding surfaces, each doing a different job:
 
-**1 · Private-data grounding — Coral.** Nine SaaS systems (Stripe, HubSpot, Intercom, Slack, Notion, PostHog, Sentry, Datadog, PagerDuty — plus Salesforce when credentials are connected) exposed as Postgres-compatible SQL schemas through one MCP server. The agent is *required* to think in joins — one wide query, one round-trip, one rowset:
-
-```sql
-SELECT
-  d.id AS dispute_id, d.amount, d.reason, d.evidence_due_by,
-  c.email AS customer_email,
-  (SELECT COUNT(*) FROM stripe.disputes
-     WHERE customer = d.customer AND id <> d.id)            AS prior_disputes,
-  (SELECT COUNT(*) FROM intercom.conversations
-     WHERE source_author_email = c.email)                   AS support_threads,
-  (SELECT COUNT(*) FROM datadog.incidents
-     WHERE service = 'custom-reports-svc'
-       AND window @> tstzrange(ch.created, ch.created + interval '7 days'))
-                                                            AS incidents_in_window,
-  (SELECT body FROM notion.pages
-     WHERE title ILIKE '%pro-rata credit%' AND active)      AS policy_body
-FROM stripe.disputes d
-JOIN stripe.charges   ch ON ch.id = d.charge_id
-JOIN stripe.customers c  ON c.id  = d.customer
-WHERE d.id = 'dp_aperture_345478';
-```
-
-Every query's result lands as an **Evidence row with full provenance** (source, table, record id); every finding must cite Evidence indices; every citation chip in the brief deep-links to the underlying record. If it's in the brief, it's in a source.
+**1 · Private-data grounding — Coral.** Nine systems of record as one SQL surface — [covered in depth above](#coral--the-retrieval-layer). Every query lands as an Evidence row with full provenance; every finding must cite Evidence indices; every citation chip deep-links to the underlying record. If it's in the brief, it's in a source.
 
 **2 · RAG over merchant policy.** The policy analyst retrieves the merchant's own SOPs from wherever they actually live — Notion, Confluence, Google Docs; it discovers the connected docs schema from the catalog at run time (search → page → formula). Decisions follow *documented* policy — "two degraded days in a thirty-day cycle" comes from the merchant's pro-rata credit page, quoted and cited, not from model priors.
 
