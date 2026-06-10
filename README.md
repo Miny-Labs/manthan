@@ -40,7 +40,7 @@ https://github.com/user-attachments/assets/afa2105c-3cc1-40e2-a799-6fcd2ee2f3f8
 
 ## What this is
 
-When a B2B SaaS merchant gets a chargeback, the truth is scattered: the charge lives in Stripe, the account in the CRM, the complaint in the support desk, the outage that caused it in observability, the refund formula in the policy docs. Someone has to read all of it, apply the documented policy, compute what's actually owed, and respond before the card network's deadline. A senior analyst spends ~5 hours per dispute doing exactly that — or the merchant eats the loss.
+Billing disputes come in many shapes — a chargeback, a refund demand, a failed payment, an early fraud warning, a contested invoice — and in every one of them the truth is scattered: the charge lives in Stripe, the account in the CRM, the complaint in the support desk, the outage that triggered it in observability, the refund formula in the policy docs. Someone has to read all of it, apply the documented policy, compute what's actually owed, and respond before the clock runs out. A senior analyst spends ~5 hours per dispute doing exactly that — or the merchant eats the loss.
 
 Manthan is that analyst, rebuilt as a team of agents that finishes in ~3 minutes:
 
@@ -53,7 +53,7 @@ Manthan is that analyst, rebuilt as a team of agents that finishes in ~3 minutes
 
 | Mandate | Implementation | Where |
 |---|---|---|
-| **B2B focus** | Chargeback/dispute resolution for B2B SaaS merchants — a money-moving back-office workflow | [Business case](#the-business-case) |
+| **B2B focus** | Billing-dispute resolution for B2B SaaS merchants — chargebacks, refund demands, failed payments, fraud warnings | [Business case](#the-business-case) |
 | **Cloud-native runtime** | Six Cloud Run services + Cloud SQL + Secret Manager; Agent Engine documented for the investigator | [`deploy/gcp/`](./deploy/gcp) |
 | **Gemini-powered intelligence** | All reasoning on Gemini: 3.1-pro (coordinator) · 3.5-flash (specialists, advisor) · 3.1-flash-lite (triage, prettifier) | [`agent/.../config.py`](./agent/src/manthan_agent/config.py) |
 | **A2A interoperability** | Three Agent Cards, JSON-RPC `/a2a`, triage→investigator over A2A, 12 skills for external agents | [`agent/.../a2a/`](./agent/src/manthan_agent/a2a) |
