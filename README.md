@@ -60,8 +60,6 @@ On the seeded $8,400 dispute, live: five specialists dispatched in one parallel 
 | **Agent Identity** | One service account per agent; identity block (agent id, SA, model, signing fingerprint) published on every Agent Card and rendered in the product's Agent Roster | [`deploy/gcp/deploy.sh`](./deploy/gcp/deploy.sh) |
 | **Collaboration > single agent** | Parallel specialists with scoped prompts + per-source schemas; specialist failures degrade instead of aborting; an external-agent skill surface a single agent could not offer | [Multi-agent](#a-multi-agent-system-not-a-chatbot) |
 
-Judge-facing detail lives in [`docs/track3/SUBMISSION.md`](./docs/track3/SUBMISSION.md).
-
 ## The business case
 
 Card networks gave merchants a losing game: disputes arrive with deadlines, evidence requirements vary by network and reason code, and the facts are scattered across payments, CRM, support, observability, and policy docs. Most B2B SaaS teams either eat the loss (revenue leakage) or burn analyst hours reconstructing what happened (a senior analyst, ~5 hours per chargeback).
@@ -299,7 +297,7 @@ Visit **[http://localhost:5173](http://localhost:5173)** and sign in via Clerk. 
 | [`manthan-api/`](./manthan-api) | API gateway, the three agent services, case store, policy engine, actor |
 | [`manthan-ui/`](./manthan-ui) | The merchant product + agent observability surfaces |
 | [`deploy/gcp/`](./deploy/gcp) | Cloud Run / Cloud SQL / Secret Manager runbook + scripts |
-| [`docs/track3/SUBMISSION.md`](./docs/track3/SUBMISSION.md) | Judge-facing submission detail |
+| [`docs/track3/SUBMISSION.md`](./docs/track3/SUBMISSION.md) | Hackathon submission write-up |
 
 ## License
 
