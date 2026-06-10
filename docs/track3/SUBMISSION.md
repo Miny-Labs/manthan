@@ -21,7 +21,7 @@ resolves the org, and dispatches the **investigator**
 local dev). The investigator creates the case and runs the ADK
 investigation in-process — a coordinator fanning out FIVE parallel
 specialists over one shared Evidence set (payments, customer context,
-reliability, policy = Notion SOP retrieval/RAG, network rules = its own
+reliability, policy = merchant policy-docs RAG, network rules = its own
 agent with built-in `google_search` grounding) — and writes its own
 events and projections through `services/case_store.py`. The **advisor**
 (`gemini-3.5-flash`) is the conversational A2A face (`ask`,
@@ -39,7 +39,7 @@ $8,400 `product_not_received` dispute `du_1Tch1OCNe0SBMhzIAppAdJjT`):
 
 - All **five specialists ran in parallel** under the coordinator and
   contributed to a single shared Evidence set — the brief's citations
-  span payments, CRM/support, reliability, the Notion SOP, and
+  span payments, CRM/support, reliability, the merchant's policy docs, and
   Google-Search-grounded network rules.
 - The **pacer's C1 refund-math gate rejected a math-less `conclude` on
   camera**: the coordinator first tried to conclude without showing the
@@ -59,7 +59,7 @@ SQL data plane (MCP) to investigate billing disputes end-to-end.
 | Piece | File |
 |---|---|
 | ADK Agent + Runner wrapped in the legacy-compatible `run_case()` event stream | `agent/src/manthan_agent/loop.py` |
-| Coordinator + FIVE parallel in-process specialists (payments_analyst, customer_context, reliability_analyst, policy_analyst = Notion SOP RAG, network_rules_analyst = `google_search` grounding), `ResilientAgentTool` 180s cap | `agent/src/manthan_agent/team.py` |
+| Coordinator + FIVE parallel in-process specialists (payments_analyst, customer_context, reliability_analyst, policy_analyst = policy-docs RAG, network_rules_analyst = `google_search` grounding), `ResilientAgentTool` 180s cap | `agent/src/manthan_agent/team.py` |
 | ADK agent definitions / model wiring for the team | `agent/src/manthan_agent/agents.py` |
 | ADK FunctionTools over Coral MCP (evidence + integer citations in session state) | `agent/src/manthan_agent/adk_tools.py` |
 | Pacing/guard rules as ADK callbacks (`before_model` nudges R1–R6, `before_tool` refund-math gate C1) | `agent/src/manthan_agent/adk_pacer.py` (pure rules: `pacer.py`) |

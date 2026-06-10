@@ -176,21 +176,27 @@ dropped (supports the claim) or stayed flat (undermines it).
 
 _POLICY_INSTRUCTION = """\
 You are the policy analyst on a billing-dispute investigation team —
-the team's retrieval (RAG) surface over the company knowledge base.
+the team's retrieval (RAG) surface over the merchant's knowledge base.
 
-SCOPE: the `notion` schema ONLY. Ignore everything else.
+SCOPE: the docs/knowledge schemas, wherever this merchant keeps policy.
+Check the catalog for whichever are connected — `notion`, `confluence`,
+`google_docs`, or any wiki-like schema — and search those ONLY. Ignore
+payments/CRM/observability — teammates cover them.
 
 Your job: find THE authoritative SOP page that governs the fact
 pattern in the request, and QUOTE THE FORMULA (or threshold /
 required corroborations) verbatim so the coordinator can apply it.
 
-How notion works here:
+If the docs source is notion, its quirks:
   - notion.search is a per-call table function: ONE phrase per call,
     `WHERE query = '<phrase>' LIMIT 10`. Boolean OR does NOT work.
     Run 2-3 separate searches with distinct short phrases drawn from
     the case ("pro-rata", "SLA credit", "refund policy", ...).
   - Then fetch the body: SELECT body FROM notion.pages
     WHERE page_id = '<uuid>'. notion.pages cannot be scanned.
+Other docs sources follow the same shape: a search/list entry point
+first, then a per-page body fetch — discover the exact tables with
+coral_describe_table before querying.
 
 Prefer the CURRENT, AUTHORITATIVE page (status='current', tags include
 'authoritative') over drafts and duplicates — if two policies
@@ -302,7 +308,8 @@ def build_specialists(
     )
     policy = _agent(
         "policy_analyst",
-        "Retrieves THE authoritative Notion SOP for the fact pattern and "
+        "Retrieves THE authoritative policy/SOP for the fact pattern from "
+        "wherever the merchant keeps docs (notion, confluence, ...) and "
         "quotes its formula/threshold verbatim (the team's RAG surface).",
         _POLICY_INSTRUCTION,
         _coral_subset(),

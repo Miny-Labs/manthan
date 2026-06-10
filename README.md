@@ -56,7 +56,7 @@ On the seeded $8,400 dispute, live: five specialists dispatched in one parallel 
 | **Gemini-powered intelligence** | Every reasoning call is Gemini: `gemini-3.1-pro-preview` (coordinator), `gemini-3.5-flash` (specialists + advisor), `gemini-3.1-flash-lite` (triage + prettifier). No other LLM anywhere | [`agent/src/manthan_agent/config.py`](./agent/src/manthan_agent/config.py) |
 | **A2A interoperability** | Three agents publish Agent Cards and speak JSON-RPC A2A; triage→investigator dispatch runs over A2A; 12 skills let external agents investigate, ask, pre-check refunds, and contribute evidence | [`agent/src/manthan_agent/a2a/`](./agent/src/manthan_agent/a2a) |
 | **Multi-agent ADK orchestration** | A coordinator + five parallel specialists (shared Evidence set, AgentTools) inside the investigator; triage / investigator / advisor as separately-identified macro agents | [`agent/src/manthan_agent/team.py`](./agent/src/manthan_agent/team.py) |
-| **Grounding + RAG** | Private-data grounding via Coral SQL over 9 SaaS systems · RAG over merchant SOPs (Notion policy retrieval) · ADK built-in `google_search` grounding for card-network evidence rules | [Grounding & RAG](#grounding--rag) |
+| **Grounding + RAG** | Private-data grounding via Coral SQL over 9 SaaS systems · RAG over merchant policy docs (Notion / Confluence / Docs — whichever the catalog shows) · ADK built-in `google_search` grounding for card-network evidence rules | [Grounding & RAG](#grounding--rag) |
 | **Agent Identity** | One service account per agent; identity block (agent id, SA, model, signing fingerprint) published on every Agent Card and rendered in the product's Agent Roster | [`deploy/gcp/deploy.sh`](./deploy/gcp/deploy.sh) |
 | **Collaboration > single agent** | Parallel specialists with scoped prompts + per-source schemas; specialist failures degrade instead of aborting; an external-agent skill surface a single agent could not offer | [Multi-agent](#a-multi-agent-system-not-a-chatbot) |
 
@@ -137,7 +137,7 @@ And the forward story: as buyers become agents (AP2), disputes become agent-to-a
 ## Grounding & RAG
 
 <p align="center">
-  <img src="docs/track3/assets/grounding.png" alt="Three grounding surfaces — Coral SQL, Notion SOP RAG, Google Search" width="860" />
+  <img src="docs/track3/assets/grounding.png" alt="Three grounding surfaces — Coral SQL, policy-docs RAG, Google Search" width="860" />
 </p>
 
 Three grounding surfaces, each doing a different job:
@@ -166,7 +166,9 @@ WHERE d.id = 'dp_aperture_345478';
 
 Every query's result lands as an **Evidence row with full provenance** (source, table, record id); every finding must cite Evidence indices; every citation chip in the brief deep-links to the underlying record. If it's in the brief, it's in a source.
 
-**2 · RAG over merchant policy.** The policy analyst retrieves the merchant's own SOPs from Notion (search → page → formula), so decisions follow *documented* policy — "two degraded days in a thirty-day cycle" comes from the merchant's pro-rata credit page, quoted and cited, not from model priors.
+**2 · RAG over merchant policy.** The policy analyst retrieves the merchant's own SOPs from wherever they actually live — Notion, Confluence, Google Docs; it discovers the connected docs schema from the catalog at run time (search → page → formula). Decisions follow *documented* policy — "two degraded days in a thirty-day cycle" comes from the merchant's pro-rata credit page, quoted and cited, not from model priors.
+
+**The provider is a slot, not a dependency.** CRM may be HubSpot *or* Salesforce, support Intercom *or* Zendesk, policy docs Notion *or* Confluence — Coral exposes whichever is connected as the same SQL schema, and the specialists discover what this merchant actually runs from the catalog instead of assuming a stack.
 
 **3 · Google Search grounding.** The network-rules analyst grounds card-network evidence requirements (e.g. Visa Compelling Evidence 3.0 for the dispute's reason code) via ADK's built-in `google_search` — rules that change too often to hardcode, retrieved fresh when a *fight* brief needs them.
 

@@ -48,7 +48,7 @@ Stripe webhook (5 event types)
   investigator agent  (gemini-3.1-pro-preview coordinator, team.py)
       │  runs run_case() in-process; 5 parallel flash specialists:
       │  payments_analyst / customer_context / reliability_analyst /
-      │  policy_analyst (Notion SOP RAG) / network_rules_analyst
+      │  policy_analyst (policy-docs RAG) / network_rules_analyst
       │  (google_search grounding); writes events + projections
       │  itself via manthan-api services/case_store.py
       ▼
@@ -157,7 +157,7 @@ Specialist fan-out (coordinator only — each is an AgentTool):
 - `payments_analyst` — stripe.* (charges, disputes, invoices, refunds).
 - `customer_context` — CRM + support (salesforce/hubspot, intercom).
 - `reliability_analyst` — datadog / sentry / pagerduty / posthog.
-- `policy_analyst` — Notion SOP retrieval; the RAG surface.
+- `policy_analyst` — merchant policy retrieval, wherever the docs live (Notion, Confluence, Google Docs — whichever schemas the catalog shows); the RAG surface.
 - `network_rules_analyst` — ADK built-in `google_search` grounding for
   card-network rules (its own agent: built-in tools can't be mixed
   with function tools).
