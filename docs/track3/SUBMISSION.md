@@ -2,7 +2,6 @@
 
 **Track:** Google for Startups AI Agents Challenge, Track 3
 (GCP-native, ADK, A2A, Gemini Enterprise / Marketplace-ready).
-**Full change plan + status:** [PLAN.md](./PLAN.md)
 **Deploy runbook:** [`deploy/gcp/README.md`](../../deploy/gcp/README.md)
 
 This file maps each judging criterion to what exists in the repo. Items
@@ -130,8 +129,7 @@ Manager (`manthan-{tenant}-gemini-api-key`).
 - ADK auto-instruments model/tool spans; Coral's `[otel]` feature nests
   SQL spans beneath tool calls.
 - `TODO (verify live)`: confirm exported spans appear in the Cloud Trace
-  explorer after the first deployed investigation (PLAN task 8 is
-  done-pending-verify).
+  explorer after the first deployed investigation.
 
 ## 5. HITL policy engine
 
@@ -150,7 +148,7 @@ Manager (`manthan-{tenant}-gemini-api-key`).
 
 ## 6. Eval strategy
 
-Layered, per PLAN.md §5:
+Layered:
 
 1. Pure-logic unit suites (no network, no LLM — 150 passing: 79 in
    `agent/tests`, 71 in `manthan-api/tests`):
@@ -179,7 +177,7 @@ Legal/trust surfaces already exist in the product:
 `manthan-ui/src/pages/Privacy.tsx`, `Terms.tsx`, `DPA.tsx`.
 
 - [ ] Rotate every credential that appeared during development
-      (Stripe test key, source tokens, AI Studio key) — PLAN.md §7.
+      (Stripe test key, source tokens, AI Studio key).
 - [ ] Deploy to a clean GCP project via `deploy/gcp/README.md` (steps 1–7).
 - [ ] Verify the public agent card:
       `curl $API_URL/.well-known/agent-card.json`.

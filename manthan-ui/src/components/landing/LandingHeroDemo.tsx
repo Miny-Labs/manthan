@@ -1,7 +1,7 @@
 /**
  * LandingHeroDemo - hero showcase, editorial-print direction.
  *
- * Design intent (per .impeccable.md):
+ * Design intent:
  *   - Editorial precision: closer to a Wall Street research note than to
  *     a SaaS dashboard. Hairlines, generous whitespace, Spectral italic
  *     for emphasis, tabular nums for every number.
