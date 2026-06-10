@@ -380,7 +380,7 @@ cutover steps (handler, publisher, worker max-instances).
   and does NOT exclude nested `.env` files — don't do that.
 - **Secret rotation** — the local test keys that appeared during
   development must be rotated before any public demo (see
-  the SUBMISSION.md checklist).
+  the pre-submission checklist).
 - **Coral source verification** — `coral-bootstrap.sh` registers sources
   but does not validate that each credential actually works; first
   investigation surfaces failures.

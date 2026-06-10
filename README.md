@@ -35,7 +35,7 @@
 https://github.com/user-attachments/assets/afa2105c-3cc1-40e2-a799-6fcd2ee2f3f8
 
 <p align="center">
-  <img src="docs/track3/assets/hero.png" alt="Manthan — three agents are the system" width="920" />
+  <img src="docs/track3/assets/master.png" alt="Manthan on Google Cloud — production architecture" width="920" />
 </p>
 
 ## What this is
@@ -314,7 +314,6 @@ All Gemini via AI Studio (`GOOGLE_API_KEY`).
 | [`manthan-api/`](./manthan-api) | API gateway, three agent services, case store, policy engine, actor |
 | [`manthan-ui/`](./manthan-ui) | Merchant product + agent observability surfaces |
 | [`deploy/gcp/`](./deploy/gcp) | Cloud Run / Cloud SQL / Secret Manager runbook + scripts |
-| [`docs/track3/SUBMISSION.md`](./docs/track3/SUBMISSION.md) | Hackathon submission write-up |
 
 ## License
 
