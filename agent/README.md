@@ -32,14 +32,18 @@ policy rule) approves them.
 
 | File | What lives there |
 |---|---|
-| `loop.py` | The async generator. `run_case(trigger, cfg)` yields `Event`s. Reads patterns from Claude Code's loop and OpenAI Agents SDK's typed `NextStep` dispatch. |
+| `loop.py` | The driver. `run_case(trigger, cfg)` builds a [Google ADK](https://google.github.io/adk-docs/) Agent (Gemini via AI Studio, retry/backoff on 503s), runs it, and translates ADK events into the same `Event` stream the worker has always consumed. |
 | `types.py` | `CaseTrigger`, `Evidence`, `Finding`, `Decision`, `DraftedAction`, `Brief`, `Event`, `NextStep` union. The locked vocabulary. Read this file second. |
-| `tools.py` | `ToolExecutor` + every tool the agent can call. Coral tools (`coral_sql`, `coral_list_catalog`, `coral_describe_table`) dispatch through an MCP stdio session; non-Coral tools (`record_finding`, `amend_brief`, `conclude`, `ask_human`, `reply`) are handled inline. |
+| `adk_tools.py` | The six investigator tools as ADK function tools, built per-run as closures over a `RunState` (Evidence list + integer citations + the final Brief). Coral tools dispatch through the MCP stdio session; `conclude`/`ask_human` end the run via `tool_context.actions.escalate`. |
+| `adk_pacer.py` | The pacer wired as ADK callbacks: pre-round rules (R1–R6) as `before_model_callback`, the C1 refund-math money-mover gate as `before_tool_callback` on `conclude`. |
+| `triage.py` | Pure Stripe-event router: `trigger_from_stripe_event()` maps the 5 webhook event types to investigation triggers. |
+| `tracing.py` | OpenTelemetry setup: Cloud Trace exporter when `GOOGLE_CLOUD_PROJECT` is set (install the `gcp` extra), OTLP fallback, silent no-op otherwise. Trace/span ids are stamped on every event. |
+| `a2a/` | The A2A surface: Agent Card builder, JSON-RPC dispatch (`message/send`, `tasks/get`), and the `CaseStore` protocol — every case artifact is pickup-able by external agents. |
 | `coral_session.py` | The MCP stdio session to the Coral binary. Bound per-run via `set_active_coral_session()` so tool calls dispatch through the live session without threading the handle through every signature. |
 | `state.py` | `EventStore` (in-memory append-only log) and the function that converts `Event`s to OpenAI chat messages for the next turn. |
 | `pacer.py` | Pre-round and pre-conclude judges. Bounded LLM calls that decide whether the agent has enough to conclude or should run another round. Keeps the loop from spinning. |
 | `prompts.py` | `SYSTEM` and `REFLEXION` prompts. Editable as plain text; no templating magic. |
-| `llm.py` | Thin wrapper over the OpenAI SDK pointed at OpenRouter. One function: `chat(cfg, messages, temperature, tools)`. |
+| `llm.py` | google-genai helpers for Gemini via AI Studio: `generate_text` / `agenerate_text` for one-shot calls, plus an OpenAI-compat `chat()` shim that keeps the operator-chat worker unchanged. |
 | `config.py` | `Config` dataclass plus `load()` from environment. Read once at process start. |
 
 ## How a case actually runs
@@ -87,21 +91,20 @@ investigate worker (manthan-api/workers/investigate.py)
 The agent itself does not know any of the persistence happened. It
 only sees the event log it is yielding into.
 
-## Why no framework
+## Why ADK (and what we kept from the no-framework era)
 
-We tried LangGraph and the OpenAI Agents SDK early. Both forced us
-to learn their state model before we could express the things we
-actually wanted: a typed event log as the single source of truth,
-deterministic dispatch by tool name, a pacer LLM that judges the
-agent loop from the outside, and zero hidden retries. The whole
-loop fits in one file you can read top-to-bottom in ten minutes.
-That trade is worth it.
+The first version of this agent was a hand-rolled async-generator
+loop — no framework, one readable file. The Track 3 rebuild moved
+it onto [Google ADK](https://google.github.io/adk-docs/) because the
+things we'd otherwise re-implement (Gemini function-calling plumbing,
+A2A interop, OpenTelemetry spans around every model/tool call, an
+eval harness) come built in.
 
-The patterns we *did* steal verbatim are called out in `loop.py`'s
-docstring: Claude Code's async-generator signature, OpenAI Agents
-SDK's typed `NextStep` union for terminal vs. non-terminal turns,
-and 12-Factor Agents items #3 (own your context window) and #8 (own
-your control flow).
+What survived the port unchanged is the part that matters: the typed
+event log as the single source of truth (`run_case` still yields the
+exact same `Event` stream, so the worker never noticed the swap), the
+Evidence list with integer citations, and the pacer — its pure rules
+now fire from ADK callbacks instead of inline checks.
 
 ## Tool surface (what the LLM can actually call)
 
@@ -136,9 +139,9 @@ production, but you can drive it from a script for debugging.
 cd agent
 uv venv && uv pip install -e .
 
-# Point at OpenRouter + the Coral binary.
+# Point at AI Studio + the Coral binary.
 cp .env.example .env
-$EDITOR .env   # set OPENROUTER_API_KEY; CORAL_BINARY defaults to `coral` on PATH
+$EDITOR .env   # set GOOGLE_API_KEY (aistudio.google.com/apikey); CORAL_BINARY defaults to `coral` on PATH
 
 # Run a single case end-to-end against a local Coral.
 uv run python -m manthan_agent.smoke aperture
@@ -167,17 +170,18 @@ Coral instance.
 
 ## Editing notes
 
-- Adding a tool: define the args as a Pydantic model in `tools.py`,
-  add a dispatch arm in the executor, and append the
-  `openai_schema` entry. The loop picks it up on the next round.
-  No registration step.
+- Adding a tool: add a function closure in `adk_tools.build_tools()`
+  (Google-style docstring becomes the declaration) and return it in
+  the list. ADK picks it up — no registration step.
 - Changing the system prompt: edit `prompts.py`. There is no
   templating. The trigger text is appended verbatim by `loop.py`.
 - Changing the model: `MANTHAN_MODEL=...` in the env. Default is
-  `deepseek/deepseek-v4-pro:exacto` (cheap, smart enough). Any
-  OpenRouter model with function-calling support works.
-- Changing the budget: `Budget` in `loop.py`. Max prompt tokens,
-  max steps, max wall-clock.
+  `gemini-3.1-pro-preview`; sub-agents run `MANTHAN_MODEL_SUBAGENT`
+  (default `gemini-3.5-flash`), triage/prettifier run
+  `MANTHAN_MODEL_TRIAGE` (default `gemini-3.1-flash-lite`). All via
+  AI Studio with `GOOGLE_API_KEY`.
+- Changing the round budget: `_MAX_LLM_CALLS` in `loop.py` is the
+  hard backstop; the pacer's `max_rounds` governs normal wrap-up.
 
 ## Reading order if you have ten minutes
 

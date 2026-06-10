@@ -17,7 +17,12 @@ class Settings(BaseSettings):
     )
 
     # ── Core ──
-    database_url: str = Field(..., alias="DATABASE_URL")
+    # Dev default (docker-compose postgres on 5433) so the app imports
+    # cleanly with no .env present; production always sets DATABASE_URL.
+    database_url: str = Field(
+        "postgresql://manthan:manthan_dev@localhost:5433/manthan",
+        alias="DATABASE_URL",
+    )
     event_signing_key: str = Field("dev-event-key-change-me", alias="EVENT_SIGNING_KEY")
     source_config_key: str = Field("dev-source-key-change-me", alias="SOURCE_CONFIG_KEY")
 
@@ -27,6 +32,8 @@ class Settings(BaseSettings):
     clerk_jwt_verification_key: str | None = Field(None, alias="CLERK_JWT_VERIFICATION_KEY")
 
     # ── LLM + Coral ──
+    # Gemini via AI Studio (GOOGLE_API_KEY auth; GOOGLE_GENAI_USE_VERTEXAI=FALSE).
+    google_api_key: str | None = Field(None, alias="GOOGLE_API_KEY")
     openrouter_api_key: str | None = Field(None, alias="OPENROUTER_API_KEY")
     coral_binary: str = Field(
         "/Users/akshmnd/Dev Projects/coral/target/release/coral",

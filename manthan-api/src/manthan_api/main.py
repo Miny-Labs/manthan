@@ -23,9 +23,8 @@ from fastapi.responses import JSONResponse
 
 from manthan_api import __version__
 from manthan_api.api import (
-    actions, audit, cases, chat, citations, clerk_webhook, demo, demo_v2,
-    demo_v3, email_webhook, events, health, inbox, me, memory, metrics,
-    narrative, policy, slack, sources, webhooks,
+    a2a, actions, audit, cases, chat, citations, clerk_webhook, events,
+    health, inbox, me, memory, metrics, narrative, policy, sources, webhooks,
 )
 from manthan_api.config import get_settings
 from manthan_api.db import close_pool, init_pool
@@ -82,19 +81,17 @@ app.include_router(citations.router)
 app.include_router(actions.router)
 app.include_router(metrics.router)
 app.include_router(webhooks.router)
-app.include_router(slack.router)
-app.include_router(email_webhook.router)
 app.include_router(clerk_webhook.router)
 app.include_router(policy.router)
 app.include_router(audit.router)
-app.include_router(demo.router)
-app.include_router(demo_v2.router)
-app.include_router(demo_v3.router)
 app.include_router(sources.router)
 app.include_router(me.router)
 app.include_router(memory.router)
 app.include_router(chat.router)
 app.include_router(narrative.router)
+# A2A surface at the app ROOT - the agent card must be discoverable at
+# /.well-known/agent-card.json (no /api prefix).
+app.include_router(a2a.router)
 
 
 @app.get("/")

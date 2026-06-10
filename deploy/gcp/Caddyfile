@@ -1,0 +1,23 @@
+# Caddyfile for the manthan-ui Cloud Run container.
+#
+# * Listens on $PORT (Cloud Run injects it; defaults to 8080).
+# * Serves the static Vite bundle from /srv.
+# * SPA fallback: any path that is not a real file rewrites to
+#   /index.html so react-router deep links work.
+# * Proxies NOTHING — the API base URL is baked into the JS bundle at
+#   build time via VITE_MANTHAN_API_URL (see Dockerfile.ui).
+
+:{$PORT:8080} {
+	root * /srv
+	encode gzip zstd
+
+	# Long-lived caching for hashed assets, no caching for the shell.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	header /index.html Cache-Control "no-cache"
+
+	# SPA fallback.
+	try_files {path} /index.html
+
+	file_server
+}

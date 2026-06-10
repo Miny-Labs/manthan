@@ -7,13 +7,16 @@
  */
 
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useSearchParams } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   ChevronsUpDown,
+  Fingerprint,
   LogOut,
   Menu,
   Moon,
+  SlidersHorizontal,
   Sun,
+  Waypoints,
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -26,18 +29,12 @@ import {
   type MeResponse,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { DemoTriggerMenu } from "@/components/app/DemoTriggerMenu";
 import { Logo } from "@/components/Logo";
 import { useTheme } from "@/lib/theme";
-import { DemoV2Wizard } from "@/components/demo-v2/DemoV2Wizard";
-import { DemoV3SlackWizard } from "@/components/demo-v2/DemoV3SlackWizard";
-import { loadState as loadDemoV2State } from "@/lib/demo-v2";
-import { loadState as loadDemoV3State } from "@/lib/demo-v3";
 
 export function AppShell() {
   const metrics = useDashboardMetrics();
   const me = useMe();
-  const demo = useDemoActive(me);
   const location = useLocation();
 
   // Mobile drawer open/close. Closed on every route change so tapping
@@ -57,6 +54,23 @@ export function AppShell() {
       <NavRow iconSlug="sources" to="/app/sources" label="Sources" count={metrics?.sources_count} />
       <NavRow iconSlug="audit" to="/app/audit" label="Audit" />
       <NavRow iconSlug="settings" to="/app/settings" label="Settings" />
+      <NavGroup label="Agent">
+        <NavRow
+          icon={<Fingerprint size={22} strokeWidth={1.5} />}
+          to="/app/agents"
+          label="Agents"
+        />
+        <NavRow
+          icon={<Waypoints size={22} strokeWidth={1.5} />}
+          to="/app/traces"
+          label="Traces"
+        />
+        <NavRow
+          icon={<SlidersHorizontal size={22} strokeWidth={1.5} />}
+          to="/app/controls"
+          label="Controls"
+        />
+      </NavGroup>
     </>
   );
 
@@ -127,8 +141,7 @@ export function AppShell() {
 
       {/* MOBILE NAV DRAWER - slides from left below lg.
             Same nav rows + workspace switch + user widget as desktop,
-            just inside a portal-ish overlay. The drawer is below the
-            demo wizard (z-9000) so the wizard always wins. */}
+            just inside a portal-ish overlay. */}
       {mobileNavOpen && (
         <div
           className="lg:hidden fixed inset-0 z-50 flex"
@@ -194,19 +207,6 @@ export function AppShell() {
           </RouteFader>
         </main>
       </div>
-
-      {demo.kind === "v2" && me?.member.email && (
-        <DemoV2Wizard
-          loggedInEmail={me.member.email}
-          onClose={demo.dismiss}
-        />
-      )}
-      {demo.kind === "v3" && me?.member.email && (
-        <DemoV3SlackWizard
-          loggedInEmail={me.member.email}
-          onClose={demo.dismiss}
-        />
-      )}
     </div>
   );
 }
@@ -260,53 +260,6 @@ function pageGroupKey(pathname: string): string {
   if (pathname === "/app" || pathname === "/app/") return "inbox";
   const m = pathname.match(/^\/app\/([^/]+)/);
   return m ? m[1] : pathname;
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Unified demo mount controller. Returns which wizard (if any) should
-// be mounted, derived from:
-//   - URL `?demo=v2` or `?demo=v3` (explicit launch from a card click)
-//   - non-stale saved localStorage state for v2 or v3 (resume after a
-//     refresh / tab close mid-flow)
-// dismiss() clears both signals (the URL param + any saved state for
-// the active wizard).
-// ──────────────────────────────────────────────────────────────────────
-
-type DemoKind = "v2" | "v3" | null;
-
-function useDemoActive(me: MeResponse | null): {
-  kind: DemoKind;
-  dismiss: () => void;
-} {
-  const [params, setParams] = useSearchParams();
-  // Derive saved-state inline on every render. Used to be cached in
-  // useState and only refreshed on pathname change, which meant when
-  // the Inbox cleared localStorage to open a story BEFORE the wizard
-  // mounted, AppShell didn't see the change until the next route
-  // navigation - the wizard rendered ON TOP of the story slide. Inline
-  // reads are cheap (single localStorage key) and always fresh.
-  const v2Saved = loadDemoV2State() !== null;
-  const v3Saved = loadDemoV3State() !== null;
-
-  const urlFlag = params.get("demo");
-  let kind: DemoKind = null;
-  if (me?.member.email) {
-    if (urlFlag === "v3" || (!urlFlag && v3Saved)) kind = "v3";
-    else if (urlFlag === "v2" || (!urlFlag && v2Saved)) kind = "v2";
-  }
-
-  const dismiss = () => {
-    if (urlFlag) {
-      const next = new URLSearchParams(params);
-      next.delete("demo");
-      setParams(next, { replace: true });
-    }
-    // clearState() on the wizard side wipes localStorage; nothing for
-    // us to do here on the React side because v2Saved/v3Saved derive
-    // inline on the next render.
-  };
-
-  return { kind, dismiss };
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -368,6 +321,7 @@ function NavGroup({ label, children }: { label?: string; children: ReactNode }) 
 
 function NavRow({
   iconSlug,
+  icon,
   to,
   label,
   count,
@@ -375,7 +329,11 @@ function NavRow({
   alert,
 }: {
   /** Slug in /icons/nav/{slug}.gif + .png (e.g. "inbox", "policies"). */
-  iconSlug: string;
+  iconSlug?: string;
+  /** Inline icon node (lucide) for rows without a gif/png asset pair.
+      Rendered inside the same 28px box as NavAnimatedIcon so the rows
+      line up on the identical grid. */
+  icon?: ReactNode;
   to: string;
   label: string;
   count?: number | string;
@@ -404,7 +362,17 @@ function NavRow({
     >
       {({ isActive }) => (
         <>
-          <NavAnimatedIcon slug={iconSlug} active={isActive} />
+          {iconSlug ? (
+            <NavAnimatedIcon slug={iconSlug} active={isActive} />
+          ) : (
+            <span
+              className="inline-flex items-center justify-center shrink-0"
+              style={{ width: 28, height: 28 }}
+              aria-hidden
+            >
+              {icon}
+            </span>
+          )}
           <span className="flex-1 truncate">{label}</span>
           {meta && (
             <span
@@ -624,7 +592,6 @@ function TopBar({
 
         <div className="flex items-center gap-5">
           <RecoveredChip minor={metrics?.recovered_this_month_minor ?? null} />
-          <DemoTriggerMenu />
         </div>
       </div>
     </header>

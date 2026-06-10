@@ -203,4 +203,7 @@ manthan-ui/public/deck/
 # Caddyfile.example, and the deploy README ship from.
 scripts/
 infra/
-docs/
+# docs/ stays local EXCEPT docs/track3/ — the Track 3 plan + submission
+# docs ship with the repo (judges read them).
+docs/*
+!docs/track3/

@@ -1,13 +1,13 @@
 """worker.prettifier - turns raw events into one-line human summaries.
 
 Polls events with NULL summary in (tool_call, tool_result, finding_recorded,
-reflexion, brief_drafted), batches up to N, calls a fast/cheap model
-(google/gemini-3.1-flash-lite via OpenRouter) with a tight prompt, and
+reflexion, brief_drafted), batches up to N, calls a fast/cheap Gemini model
+(cfg.model_triage, AI Studio via manthan_agent.llm) with a tight prompt, and
 writes the summary back. The SSE stream + the UI surface these short
 sentences; expanding a step shows the raw event.
 
 This is the Haiku-pretty-trace pattern from Claude Code: the orchestrator
-uses Sonnet/GPT, the trace rendering uses a tiny model for cost/latency.
+uses the pro model, the trace rendering uses a tiny model for cost/latency.
 """
 
 from __future__ import annotations
@@ -20,24 +20,27 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import httpx
 from dotenv import load_dotenv
 
 # Load .env BEFORE reading MODEL - otherwise the module-level constant
-# locks in the in-code default (gemini-3.1-flash-lite) and the
-# MANTHAN_PRETTIFIER_MODEL override in manthan-api/.env never takes
-# effect. Tried this once before, missed it because the main() block
-# also calls load_dotenv but only AFTER module import.
+# locks in the in-code default and the MANTHAN_PRETTIFIER_MODEL override
+# in manthan-api/.env never takes effect. Tried this once before, missed
+# it because the main() block also calls load_dotenv but only AFTER
+# module import.
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH)
+
+from manthan_agent import config as agent_config  # noqa: E402
+from manthan_agent import llm as agent_llm  # noqa: E402
 
 from manthan_api.db import close_pool, get_pool, init_pool  # noqa: E402
 
 logger = logging.getLogger("worker.prettifier")
 
-# Model identifier on OpenRouter.
-MODEL = os.environ.get("MANTHAN_PRETTIFIER_MODEL", "google/gemini-3.1-flash-lite")
+# Optional model override; empty/unset falls back to cfg.model_triage
+# (gemini-3.1-flash-lite on AI Studio).
+MODEL = os.environ.get("MANTHAN_PRETTIFIER_MODEL") or None
 BATCH_SIZE = 8
 POLL_INTERVAL = 2.0
 
@@ -92,24 +95,19 @@ class PrettifierWorker:
     def __init__(self, poll_interval: float = POLL_INTERVAL) -> None:
         self.poll_interval = poll_interval
         self._stop = asyncio.Event()
-        self._http: httpx.AsyncClient | None = None
+        self._cfg: agent_config.Config | None = None
+        self._model: str = ""
 
     async def run(self) -> None:
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            logger.error("OPENROUTER_API_KEY missing - prettifier idle")
+        cfg = agent_config.load()
+        if not cfg.google_api_key:
+            logger.error("GOOGLE_API_KEY missing - prettifier idle")
             return
-        self._http = httpx.AsyncClient(
-            base_url="https://openrouter.ai/api/v1",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://manthan-ui.vercel.app",
-                "X-Title": "Manthan trace prettifier",
-            },
-            timeout=httpx.Timeout(20.0),
+        self._cfg = cfg
+        self._model = MODEL or cfg.model_triage
+        logger.info(
+            "worker.prettifier starting (model=%s, batch=%d)", self._model, BATCH_SIZE
         )
-        logger.info("worker.prettifier starting (model=%s, batch=%d)", MODEL, BATCH_SIZE)
 
         while not self._stop.is_set():
             try:
@@ -123,7 +121,6 @@ class PrettifierWorker:
                 except asyncio.TimeoutError:
                     pass
 
-        await self._http.aclose()
         logger.info("worker.prettifier stopped")
 
     def stop(self) -> None:
@@ -176,35 +173,17 @@ class PrettifierWorker:
             f"TYPE: {row['type']}\n"
             f"DATA (json):\n{_clip(json.dumps(data, default=str), 1800)}"
         )
-        assert self._http is not None
-        # Reasoning models (Mercury, GPT-5, o3, etc.) burn 100-200 tokens
-        # thinking BEFORE writing the answer - at max_tokens=64 they finish
-        # mid-reasoning with empty content. Detect by model id and bump
-        # both the budget and disable reasoning emission.
-        is_reasoning = any(
-            x in MODEL for x in ("mercury", "o3", "o1", "gpt-5", "reasoning")
+        assert self._cfg is not None
+        text = await agent_llm.agenerate_text(
+            self._cfg,
+            user=user_msg,
+            system=SYSTEM_PROMPT,
+            model=self._model,
+            temperature=0.2,
+            max_output_tokens=64,
         )
-        payload: dict[str, Any] = {
-            "model": MODEL,
-            "max_tokens": 256 if is_reasoning else 64,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-        }
-        if is_reasoning:
-            # OpenRouter unified flag - tells the upstream to suppress
-            # the reasoning trace in the response, keeping only the
-            # final answer. Cheaper + matches the 1-line UX we want.
-            payload["reasoning"] = {"exclude": True}
-        r = await self._http.post("/chat/completions", json=payload)
-        r.raise_for_status()
-        body = r.json()
-        text = (
-            ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-            or _fallback_summary(row["type"], data)
-        )
+        if not text:
+            text = _fallback_summary(row["type"], data)
         return _normalize(text)
 
 

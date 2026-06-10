@@ -1,0 +1,123 @@
+# ──────────────────────────────────────────────────────────────────────
+# Manthan API + workers image (Cloud Run).
+#
+# Build context: the REPO ROOT (agent/ and manthan-api/ must both be in
+# the context — manthan-api has an editable path dependency on ../agent):
+#
+#   docker build -f deploy/gcp/Dockerfile.api -t manthan-api .
+#
+# deploy/gcp/deploy.sh builds this via `gcloud builds submit`.
+#
+# One image, two run modes:
+#   * API (default ENTRYPOINT):
+#       uvicorn manthan_api.main:app --host 0.0.0.0 --port 8080
+#   * Worker (Cloud Run command override, see deploy.sh):
+#       --command=/usr/local/bin/worker-entrypoint.sh
+#     which registers Coral sources (coral-bootstrap.sh), starts a tiny
+#     health listener on $PORT (Cloud Run requires a listening port for
+#     services), then exec's `python -m manthan_api.workers.main`.
+#
+# Stages:
+#   1. coral    — downloads + verifies the prebuilt Coral v0.4.2 binary
+#   2. builder  — python:3.12-slim + uv, installs agent + manthan-api
+#   3. runtime  — python:3.12-slim, copies venv + coral binary
+#
+# Context ignore: deploy.sh swaps deploy/gcp/Dockerfile.api.dockerignore
+# in as the workspace .dockerignore before the Cloud Build docker step
+# (it also excludes nested **/.env files — important for local builds);
+# local BuildKit builds pick the same file up automatically.
+# ──────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 1 — fetch the Coral binary (the worker spawns `coral mcp-stdio`
+# per investigation; CORAL_BINARY points the agent at it).
+#
+# Asset name VERIFIED against the GitHub release:
+#   $ gh api repos/withcoral/coral/releases/tags/v0.4.2 --jq '.assets[].name'
+#   checksums.sha256
+#   coral-aarch64-apple-darwin.tar.gz
+#   coral-aarch64-unknown-linux-gnu.tar.gz
+#   coral-x86_64-apple-darwin.tar.gz
+#   coral-x86_64-pc-windows-msvc.zip
+#   coral-x86_64-unknown-linux-gnu.tar.gz      <-- this one (linux x86_64)
+#
+# The tarball contains a single file: `coral`.
+# SHA-256 below copied from the release's checksums.sha256 asset.
+# ──────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS coral
+
+ARG CORAL_VERSION=0.4.2
+ARG CORAL_SHA256=f03b11f25091c014de5665078ba8e4723e723cd2d0d00d0d2d6d27ae3e70bcd3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL -o /tmp/coral.tar.gz \
+        "https://github.com/withcoral/coral/releases/download/v${CORAL_VERSION}/coral-x86_64-unknown-linux-gnu.tar.gz" \
+    && echo "${CORAL_SHA256}  /tmp/coral.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/coral.tar.gz -C /usr/local/bin coral \
+    && chmod 0755 /usr/local/bin/coral
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 2 — install python deps with uv.
+#
+# agent/ and manthan-api/ keep the same sibling layout as the repo, so
+# the `manthan-agent = { path = "../agent", editable = true }` source in
+# manthan-api/pyproject.toml resolves without rewriting. Because the
+# install is editable (path-based), the runtime stage copies /app
+# wholesale to preserve absolute paths inside the venv.
+# ──────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
+
+ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+COPY agent /app/agent
+COPY manthan-api /app/manthan-api
+
+WORKDIR /app/manthan-api
+# Prefer the locked resolution; fall back to a fresh resolve if the lock
+# predates a pyproject edit (same pattern as the existing Fly image).
+RUN uv sync --no-dev --frozen || uv sync --no-dev
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 3 — runtime.
+# ──────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# libssl3 + ca-certificates: Coral (Rust, dynamic OpenSSL) and outbound
+# HTTPS from the python clients.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=coral   /usr/local/bin/coral /usr/local/bin/coral
+COPY --from=builder /app /app
+
+# Worker-mode helpers (only used when the Cloud Run command is overridden).
+COPY deploy/gcp/coral-bootstrap.sh   /usr/local/bin/coral-bootstrap.sh
+COPY deploy/gcp/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/coral-bootstrap.sh /usr/local/bin/worker-entrypoint.sh
+
+ENV PATH="/app/manthan-api/.venv/bin:${PATH}" \
+    CORAL_BINARY=/usr/local/bin/coral \
+    GOOGLE_GENAI_USE_VERTEXAI=FALSE \
+    PORT=8080
+
+WORKDIR /app/manthan-api
+
+EXPOSE 8080
+
+# Default: the API. The worker service overrides the command (deploy.sh):
+#   gcloud run deploy manthan-worker ... \
+#     --command=/usr/local/bin/worker-entrypoint.sh
+# which ends in: exec python -m manthan_api.workers.main
+ENTRYPOINT ["uvicorn", "manthan_api.main:app", "--host", "0.0.0.0", "--port", "8080"]

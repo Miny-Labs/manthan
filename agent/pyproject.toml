@@ -1,10 +1,10 @@
 # Manthan investigation agent.
 #
-# A small Python loop that drives an LLM (via OpenRouter, default
-# deepseek/deepseek-v4-pro:exacto) over the Coral SQL data plane (over MCP)
-# to investigate billing-ops cases, draft replies, propose actions.
+# An ADK (Agent Development Kit) agent that drives Gemini (via AI Studio,
+# default gemini-3.1-pro-preview) over the Coral SQL data plane (over MCP)
+# to investigate billing disputes, draft replies, propose actions.
 #
-# No agent framework. ~hundreds of LOC, fully transparent loop.
+# Native A2A interop, Cloud Trace instrumentation, and ADK evals.
 
 [project]
 name = "manthan-agent"
@@ -19,13 +19,22 @@ authors = [
 
 # Runtime dependencies. Keep this list tight.
 dependencies = [
-    "openai>=1.55.0",          # MIT  - OpenAI-compat client, points at OpenRouter
-    "mcp>=1.2.0",              # MIT  - Model Context Protocol stdio client
+    "google-adk>=2.2",         # Apache-2.0 - Agent Development Kit (agent, tools, callbacks, A2A, eval)
+    "google-genai>=2.8",       # Apache-2.0 - Gemini client (AI Studio)
+    "mcp>=1.2.0",              # MIT  - Model Context Protocol stdio client (Coral)
     "pydantic>=2.7",           # MIT  - typed tool args + structured outputs
     "python-dotenv>=1.0",      # BSD  - loads .env into os.environ
     "anyio>=4.4",              # MIT  - async backend for mcp
     "rich>=13.7",              # MIT  - pretty console output
 ]
+
+# Optional extras:
+#   dev - test tooling (pure-logic pytest suite; no LLM calls)
+#   gcp - Cloud Trace span exporter; tracing.setup_tracing() wires it when
+#         GOOGLE_CLOUD_PROJECT is set, and stays a silent no-op without it.
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+gcp = ["opentelemetry-exporter-gcp-trace>=1.6"]
 
 [build-system]
 requires = ["hatchling"]

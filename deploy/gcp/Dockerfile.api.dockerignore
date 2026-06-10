@@ -1,0 +1,39 @@
+# Context-ignore for Dockerfile.api (build context = repo root).
+#
+# Used two ways:
+#   * Cloud Build: deploy.sh copies this file over the workspace's
+#     .dockerignore before the docker build step (the repo-root
+#     .dockerignore predates this deploy and excludes manthan-ui etc.).
+#   * Local BuildKit (Docker 23+ default): picked up automatically as
+#     the per-Dockerfile ignore (deploy/gcp/Dockerfile.api.dockerignore),
+#     overriding the root .dockerignore.
+#
+# Goals: small context, NO local secrets (nested .env files), no UI.
+
+.git
+.github
+.DS_Store
+*.log
+
+# Secrets — never let local env files into an image layer.
+**/.env
+**/.env.*
+
+# Python junk
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+
+# Node junk
+**/node_modules
+
+# Not needed by the API/worker image
+manthan-ui
+coral
+vps
+docs
+
+# Agent local scratch
+agent/.manthan

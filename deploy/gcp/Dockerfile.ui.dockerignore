@@ -1,0 +1,31 @@
+# Context-ignore for Dockerfile.ui (build context = repo root).
+#
+# REQUIRED: the repo-root .dockerignore excludes `manthan-ui` (it was
+# written for the API-only Fly image), which would make this build's
+# `COPY manthan-ui/ ./` fail. deploy.sh copies this file over the
+# workspace .dockerignore before the UI docker build step; local
+# BuildKit builds (Docker 23+ default) pick it up automatically as the
+# per-Dockerfile ignore file.
+
+.git
+.github
+.DS_Store
+*.log
+
+# Secrets / local env files (Vite would also read .env.production —
+# the deploy bakes config via --build-arg instead).
+**/.env
+**/.env.*
+
+# Junk
+**/node_modules
+**/.venv
+**/__pycache__
+manthan-ui/dist
+
+# Not needed by the UI image
+agent
+manthan-api
+coral
+vps
+docs

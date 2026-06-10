@@ -102,7 +102,7 @@ One query. One round-trip. One rowset that contains everything needed to write t
 3. Coral fans the SQL out to each upstream API, normalizes results into Postgres-compatible rows, and returns one rowset.
 4. Each query's `(seq, source, sql, rows, ms)` is recorded as an event; the Workspace's **Coral mode** renders the raw SQL feed alongside the prettified prose so operators can see exactly what the agent asked.
 
-The agent code lives in [`agent/`](./agent) - a small Python loop (~hundreds of LOC, no framework) wired straight to OpenRouter. The Coral binary is built from the sibling [`coral`](https://github.com/withcoral/coral) repo.
+The agent code lives in [`agent/`](./agent) - a [Google ADK](https://google.github.io/adk-docs/) agent on Gemini 3 (via [AI Studio](https://aistudio.google.com)), with the pacer's policy rules wired as ADK callbacks and every case artifact exposed over [A2A](https://a2a-protocol.org). The Coral binary is built from the sibling [`coral`](https://github.com/withcoral/coral) repo.
 
 ## Sources
 
@@ -158,9 +158,9 @@ When an upstream rejects an action (Stripe `charge_disputed`, Slack `channel_not
 git clone https://github.com/Miny-Labs/manthan
 cd manthan
 
-# 1 · Environment - fill in OPENROUTER_API_KEY, CORAL_BINARY,
-#                   STRIPE_API_KEY, RESEND_API_KEY, HUBSPOT_ACCESS_TOKEN,
-#                   SLACK_TOKEN, NOTION_TOKEN, CLERK_*
+# 1 · Environment - fill in GOOGLE_API_KEY (aistudio.google.com/apikey),
+#                   CORAL_BINARY, STRIPE_API_KEY, HUBSPOT_ACCESS_TOKEN,
+#                   SLACK_TOKEN, NOTION_API_KEY, CLERK_*
 cp .env.example .env
 cp manthan-api/.env.example manthan-api/.env
 cp agent/.env.example agent/.env
@@ -179,14 +179,14 @@ uv run python -m manthan_api.workers.prettifier   &
 cd ../manthan-ui && npm install && npm run dev
 ```
 
-Visit **[http://localhost:5173](http://localhost:5173)**, sign in via Clerk, then click **Stripe Chargeback** on the empty-inbox hero to fire the canonical Aperture demo (an $8,400 dispute that resolves to a $560 partial credit).
+Visit **[http://localhost:5173](http://localhost:5173)** and sign in via Clerk. Fire a case by sending a Stripe `charge.dispute.created` test event to `/webhooks/stripe` (e.g. `stripe trigger charge.dispute.created`), or ask the agent over A2A: `POST /a2a` with skill `investigate_dispute`. The canonical seeded case — an $8,400 dispute that resolves to a $560 pro-rata credit — is dispute `du_1Tch1O…` in the test-mode Stripe account.
 
 ## Architecture
 
 ```
-       │  Stripe / Email / Slack
-       │  webhook · inbound · @-mention
-       ▼
+       │  Stripe webhooks (5 event types)        A2A (external agents)
+       │  dispute · fraud-warning · payment      message/send · tasks/get
+       ▼                                         ▼
 ┌────────────────────────────────────────────────────────────────┐
 │   manthan-api  ·  FastAPI + asyncpg                            │
 │   • cases / events / findings / actions  (per-org PG schema)   │
@@ -224,20 +224,22 @@ Visit **[http://localhost:5173](http://localhost:5173)**, sign in via Clerk, the
 
 **Backend** · [FastAPI](https://fastapi.tiangolo.com) + [asyncpg](https://github.com/MagicStack/asyncpg) · [PostgreSQL](https://www.postgresql.org) (cases, events, findings, actions) · 3 background workers (`investigate`, `actor`, `prettifier`) coordinated via `FOR UPDATE SKIP LOCKED`.
 
-**Agent** · `agent/` is a ~hundreds-of-LOC Python loop (no framework) over the [OpenAI-compat](https://platform.openai.com/docs/api-reference) client pointed at [OpenRouter](https://openrouter.ai). Tools: `coral_sql`, `coral_list_catalog`, `coral_describe_table` (read, via Coral MCP) and `record_finding`, `ask_human`, `conclude`, `amend_brief` (in-loop, no external side effects). See [`agent/README.md`](./agent/README.md) for the full tool surface + loop walkthrough.
+**Agent** · `agent/` is a [Google ADK](https://google.github.io/adk-docs/) agent (`google-adk` 2.x) on Gemini via [AI Studio](https://aistudio.google.com). Tools: `coral_sql`, `coral_list_catalog`, `coral_describe_table` (read, via Coral MCP) and `record_finding`, `ask_human`, `conclude` (in-loop, no external side effects). The pacer's money-mover invariants run as ADK `before_model` / `before_tool` callbacks; the run is OpenTelemetry-instrumented end to end (Cloud Trace exporter via the `gcp` extra). See [`agent/README.md`](./agent/README.md) for the tool surface.
+
+**A2A** · every case artifact — cases, briefs, findings, actions, the audit trail — is pickup-able by external agents over the [A2A protocol](https://a2a-protocol.org): Agent Card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (1 action skill, 6 query skills).
 
 **Data plane** · [Coral](https://github.com/withcoral/coral) - Rust binary, MCP/stdio bridge, 11 SaaS schemas as Postgres SQL.
 
-**Models** (all via OpenRouter)
-- Investigator + chat: `x-ai/grok-build-0.1`
-- Tool-call summarizer (the live "prettifier"): `inception/mercury-2`
-- Story-image generation: `google/gemini-3.1-flash-image-preview`
+**Models** (Gemini, via AI Studio)
+- Investigator: `gemini-3.1-pro-preview`
+- Sub-agents + operator chat: `gemini-3.5-flash`
+- Event triage + the live "prettifier": `gemini-3.1-flash-lite`
 
 **External services** · [Stripe](https://stripe.com) (payments + disputes) · [Resend](https://resend.com) (transactional + inbound email) · [HubSpot](https://hubspot.com) (CRM notes) · [Slack](https://slack.com) (ops notifications) · [Notion](https://notion.so) (policy + resolution blocks) · [Linear](https://linear.app) (escalation issues).
 
 ## Self-hosting
 
-Manthan ships as 1 API + 3 workers + a Postgres + a Vite static frontend + the Coral subprocess. Single-box VPS deploy is the supported path - Caddy + cloud-init + a small setup script bring up the whole stack on one Ubuntu box. This is what runs at [manthan.quest](https://manthan.quest). Full walkthrough in [`DEPLOY.md`](./DEPLOY.md).
+Manthan ships as 1 API + 3 workers + a Postgres + a Vite static frontend + the Coral subprocess. **Google Cloud is the supported path** — Cloud Run (api + worker + ui), Cloud SQL Postgres, Secret Manager (per-tenant `coral-{tenant}-{credential}` secrets with per-secret IAM), and Cloud Trace. The full runbook, Dockerfiles, and bootstrap scripts live in [`deploy/gcp/`](./deploy/gcp). The legacy single-box VPS walkthrough remains in [`DEPLOY.md`](./DEPLOY.md).
 
 ## Contributing
 

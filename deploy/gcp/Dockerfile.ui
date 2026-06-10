@@ -1,0 +1,69 @@
+# ──────────────────────────────────────────────────────────────────────
+# Manthan UI image (Cloud Run): Vite build -> static files behind Caddy.
+#
+# Build context: the REPO ROOT (copies manthan-ui/):
+#
+#   docker build -f deploy/gcp/Dockerfile.ui \
+#     --build-arg VITE_MANTHAN_API_URL=https://manthan-api-xxxx.run.app \
+#     --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_live_... \
+#     -t manthan-ui .
+#
+# HOW THE UI RESOLVES THE API BASE (verified in manthan-ui/src):
+#   * src/lib/api.ts            : import.meta.env.VITE_MANTHAN_API_URL ?? ""
+#   * src/lib/useInboxStream.ts : same variable (SSE inbox stream)
+#   * src/lib/useCaseEvents.ts  : same variable (SSE case events)
+#   The default is "" -> RELATIVE fetches (/api/*, same origin), which
+#   only works when something on the same origin proxies to the API
+#   (the VPS Caddy does; THIS image deliberately proxies nothing).
+#   On Cloud Run the API is a separate origin, so VITE_MANTHAN_API_URL
+#   MUST be baked at build time with the manthan-api service URL —
+#   deploy.sh deploys the API first and passes its URL in here.
+#   CORS note: the API only allows WEB_APP_ORIGIN (manthan_api/config.py),
+#   so deploy.sh also points WEB_APP_ORIGIN at this UI's URL.
+#
+# Other build-time vars:
+#   * VITE_CLERK_PUBLISHABLE_KEY — Clerk auth (src/main.tsx warns if unset)
+#   * VITE_MANTHAN_DEV_ORG       — dev-org header fallback (defaults "acme")
+#
+# NOTE — context ignore: the repo-root .dockerignore excludes manthan-ui
+# (written for the API-only Fly image), which would break this build.
+# deploy.sh swaps in deploy/gcp/Dockerfile.ui.dockerignore before the
+# Cloud Build docker step; local BuildKit builds (Docker 23+ default)
+# pick the same file up automatically as the per-Dockerfile ignore.
+# ──────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 1 — build the Vite bundle.
+# ──────────────────────────────────────────────────────────────────────
+FROM node:20 AS build
+
+WORKDIR /ui
+
+# Install deps from the lockfile first for layer caching.
+COPY manthan-ui/package.json manthan-ui/package-lock.json ./
+RUN npm ci
+
+COPY manthan-ui/ ./
+
+# Vite inlines import.meta.env.VITE_* at BUILD time — these are baked
+# into the JS bundle, not read at container start.
+ARG VITE_MANTHAN_API_URL=""
+ARG VITE_CLERK_PUBLISHABLE_KEY=""
+ARG VITE_MANTHAN_DEV_ORG="acme"
+ENV VITE_MANTHAN_API_URL=${VITE_MANTHAN_API_URL} \
+    VITE_CLERK_PUBLISHABLE_KEY=${VITE_CLERK_PUBLISHABLE_KEY} \
+    VITE_MANTHAN_DEV_ORG=${VITE_MANTHAN_DEV_ORG}
+
+RUN npm run build   # vite build -> /ui/dist
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 2 — serve with Caddy. SPA fallback to index.html; NO proxying
+# (the API base is baked into the bundle above).
+# ──────────────────────────────────────────────────────────────────────
+FROM caddy:2-alpine
+
+COPY deploy/gcp/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /ui/dist /srv
+
+# Cloud Run injects PORT (default 8080); the Caddyfile listens on it.
+EXPOSE 8080

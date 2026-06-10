@@ -752,52 +752,28 @@ function shortRef(ref: string): string {
 
 
 // ──────────────────────────────────────────────────────────────────────
-// Demo triggers - dev-only endpoint that synthesizes case_opened events
-// against the pre-seeded scenarios. Useful for in-UI "fire scenario"
-// buttons during the recording.
+// Case events - REST snapshot of the event timeline. The workspace
+// live-tails the SSE stream (lib/useCaseEvents.ts); this is the
+// polling/snapshot sibling used by surfaces that just need the
+// history (e.g. the trace viewer at /app/traces).
 // ──────────────────────────────────────────────────────────────────────
 
-export interface DemoScenario {
-  id: string;
-  label: string;
-  surface: string;
+export interface ApiCaseEvent {
+  id: number;
+  seq: number;
+  type: string;
+  actor: string;
+  data: Record<string, unknown>;
+  summary: string | null;
+  created_at: string;
 }
 
-export interface DemoTriggerResponse {
-  case_id: string;
-  short_id: string;
-  scenario: string;
-}
-
-export async function listDemoScenarios(): Promise<{ scenarios: DemoScenario[] }> {
-  return call(`/api/demo/scenarios`);
-}
-
-/**
- * Fire a demo scenario. Optionally plumbs the operator's own login
- * email as `demo_email_to`, which (a) routes the customer_email action
- * to that exact inbox with no [demo →] subject prefix, and (b) forces
- * the case to require manual approval - policy auto-approval is
- * skipped so the operator gets to approve the brief before the email
- * actually fires.
- */
-export async function triggerDemoScenario(
-  id: string,
-  opts?: { demoEmailTo?: string | null },
-): Promise<DemoTriggerResponse> {
-  const body =
-    opts?.demoEmailTo
-      ? JSON.stringify({ demo_email_to: opts.demoEmailTo })
-      : JSON.stringify({});
-  return call(`/api/demo/trigger/${encodeURIComponent(id)}`, {
-    method: "POST",
-    body,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-export async function resetDemoState(): Promise<void> {
-  await call<void>(`/api/demo/reset`, { method: "POST" });
+export async function listCaseEvents(
+  caseId: string,
+  afterSeq = 0,
+): Promise<{ case_id: string; events: ApiCaseEvent[] }> {
+  const qs = afterSeq > 0 ? `?after_seq=${afterSeq}` : "";
+  return call(`/api/cases/${caseId}/events${qs}`);
 }
 
 

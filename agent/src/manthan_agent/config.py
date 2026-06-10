@@ -24,9 +24,15 @@ if _ENV_FILE.exists():
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    # ── LLM ─────────────────────────────────────────────────────────
+    # ── LLM (Gemini via AI Studio) ──────────────────────────────────
+    google_api_key: str | None
+    model: str             # orchestrator / investigator (gemini-3.1-pro-preview)
+    model_subagent: str    # sub-agents: actions, triage helpers (gemini-3-flash-preview)
+    model_triage: str      # cheap event router (gemini-3.1-flash-lite)
+    gemini_use_vertexai: bool
+    # Legacy OpenRouter key — kept optional through the migration; the
+    # event prettifier + cross-case chat read it until they're ported.
     openrouter_api_key: str | None
-    model: str
 
     # ── Coral ───────────────────────────────────────────────────────
     coral_binary: str
@@ -123,8 +129,12 @@ def _env(name: str) -> str | None:
 def load() -> Config:
     """Read env vars once. Reuse the returned Config across the process."""
     return Config(
+        google_api_key=_env("GOOGLE_API_KEY"),
+        model=_env("MANTHAN_MODEL") or "gemini-3.1-pro-preview",
+        model_subagent=_env("MANTHAN_MODEL_SUBAGENT") or "gemini-3.5-flash",
+        model_triage=_env("MANTHAN_MODEL_TRIAGE") or "gemini-3.1-flash-lite",
+        gemini_use_vertexai=(_env("GOOGLE_GENAI_USE_VERTEXAI") or "FALSE").upper() == "TRUE",
         openrouter_api_key=_env("OPENROUTER_API_KEY"),
-        model=_env("MANTHAN_MODEL") or "deepseek/deepseek-v4-pro:exacto",
         coral_binary=_env("CORAL_BINARY") or "coral",
         # Payments
         stripe_api_key=_env("STRIPE_API_KEY"),

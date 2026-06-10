@@ -45,6 +45,9 @@ const Packs = lazy(() => import("./pages/Packs"));
 const Help = lazy(() => import("./pages/Help"));
 const Inbox = lazy(() => import("./pages/Inbox"));
 const InvestigationMemo = lazy(() => import("./pages/drafts/InvestigationMemo"));
+const AgentRoster = lazy(() => import("./pages/AgentRoster"));
+const AgentTraces = lazy(() => import("./pages/AgentTraces"));
+const AgentControls = lazy(() => import("./pages/AgentControls"));
 
 /**
  * Minimal Suspense fallback - matches the bg color of the route shell
@@ -147,6 +150,10 @@ export function AppRouter() {
             <Route path="policy" element={<PolicyPage />} />
             <Route path="metrics" element={<Metrics />} />
             <Route path="audit" element={<AuditPage />} />
+            {/* Agent group - identity, observability, controls. */}
+            <Route path="agents" element={<AgentRoster />} />
+            <Route path="traces" element={<AgentTraces />} />
+            <Route path="controls" element={<AgentControls />} />
             <Route path="settings" element={<Settings />} />
             <Route path="help" element={<Help />} />
 
