@@ -122,7 +122,7 @@ async def get_or_generate_reasoning(
                 system=SYSTEM_PROMPT,
                 model=MODEL,
                 temperature=0.3,
-                max_output_tokens=200,
+                max_output_tokens=1024,
             )
         ).strip()
     except Exception as e:  # noqa: BLE001

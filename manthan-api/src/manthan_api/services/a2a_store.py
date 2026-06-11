@@ -233,7 +233,7 @@ async def grounded_answer(
             system=system,
             model=model or cfg.model_subagent,
             temperature=0.2,
-            max_output_tokens=512,
+            max_output_tokens=2048,
         )
         return (text or "(no reply)"), True
     except agent_llm.LLMNotConfigured:

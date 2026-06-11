@@ -180,7 +180,7 @@ class PrettifierWorker:
             system=SYSTEM_PROMPT,
             model=self._model,
             temperature=0.2,
-            max_output_tokens=64,
+            max_output_tokens=512,
         )
         if not text:
             text = _fallback_summary(row["type"], data)

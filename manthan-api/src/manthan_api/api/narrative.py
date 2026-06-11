@@ -201,7 +201,7 @@ async def get_narrative(
             system=SYSTEM_PROMPT,
             model=MODEL,
             temperature=0.3,
-            max_output_tokens=400,
+            max_output_tokens=1536,
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("narrative LLM call failed: %s", e)
