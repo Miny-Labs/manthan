@@ -26,6 +26,10 @@
     <td align="right"><strong>A2A</strong></td>
     <td>Agent cards: <a href="https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">advisor</a> · <a href="https://manthan-investigator-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">investigator</a> · <a href="https://manthan-triage-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">triage</a> — callable by any agent, no SDK required</td>
   </tr>
+  <tr>
+    <td align="right"><strong>Refactored from</strong></td>
+    <td><a href="https://github.com/akash-mondal/manthan">akash-mondal/manthan</a> — the original pre-challenge agent (single hand-rolled loop), serving the demo above</td>
+  </tr>
 </table>
 </div>
 
@@ -334,7 +338,7 @@ On GCP the triage, advisor, gateway and worker services call Gemini through **Ve
 
 ## License
 
-Apache 2.0 — see [`LICENSE`](./LICENSE). This Track 3 submission is a refactor of the original Manthan agent, [akash-mondal/manthan](https://github.com/akash-mondal/manthan), which still runs the hosted demo at [manthan.quest](https://manthan.quest).
+Apache 2.0 — see [`LICENSE`](./LICENSE).
 
 ---
 
