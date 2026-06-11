@@ -301,7 +301,7 @@ Runbook, Dockerfiles, and scripts in [`deploy/gcp/`](./deploy/gcp):
 | Triage + prettifier | `gemini-3.1-flash-lite` |
 | Action execution (actor) | deterministic — no model |
 
-On GCP all Gemini calls go through **Vertex AI** — each agent authenticates as its own service account (ADC), so no model API key exists in the runtime. Local dev falls back to an AI Studio `GOOGLE_API_KEY`.
+On GCP the triage, advisor, gateway and worker services call Gemini through **Vertex AI**, each authenticating as its own service account (ADC) — no model API key in those runtimes. The investigator's coordinator drives the preview Pro model at burst rates a fresh project's Vertex shared quota can't absorb, so it runs on AI Studio quota until the project's capacity is raised (one env var: `INVESTIGATOR_GEMINI_VERTEX=TRUE`). Local dev uses an AI Studio `GOOGLE_API_KEY` throughout.
 
 - **Agent** — [Google ADK](https://google.github.io/adk-docs/) 2.x: coordinator + five specialists as AgentTools over one Evidence set; coral tools (read) + `record_finding` / `ask_human` / `conclude` (coordinator-only); pacer as callbacks; OpenTelemetry throughout. Details: [`agent/README.md`](./agent/README.md).
 - **Backend** — FastAPI + asyncpg + PostgreSQL; three A2A agent services + two deterministic workers (`FOR UPDATE SKIP LOCKED`).

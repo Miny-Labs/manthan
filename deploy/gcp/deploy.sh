@@ -224,6 +224,14 @@ done
 GEMINI_VERTEX="${GEMINI_VERTEX:-TRUE}"
 COMMON_ENV="GOOGLE_GENAI_USE_VERTEXAI=${GEMINI_VERTEX},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,CORAL_BINARY=/usr/local/bin/coral"
 
+# The investigator is the exception: its coordinator drives the preview
+# Pro model at burst rates a fresh project's Vertex dynamic shared quota
+# cannot absorb (sustained 429s mid-investigation), so it defaults to AI
+# Studio quota. Flip to TRUE once your project's preview-model capacity
+# is raised.
+INVESTIGATOR_GEMINI_VERTEX="${INVESTIGATOR_GEMINI_VERTEX:-FALSE}"
+INVESTIGATOR_ENV="GOOGLE_GENAI_USE_VERTEXAI=${INVESTIGATOR_GEMINI_VERTEX},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,CORAL_BINARY=/usr/local/bin/coral"
+
 # ── 2. Build the API/worker image ─────────────────────────────────────
 
 echo "==> building ${API_IMAGE}"
@@ -282,7 +290,7 @@ gcloud run deploy manthan-investigator \
     --service-account "$INVESTIGATOR_SA" \
     --add-cloudsql-instances "$SQL_CONN" \
     --set-secrets "$SET_SECRETS" \
-    --set-env-vars "${COMMON_ENV},A2A_SERVICE_ACCOUNT=${INVESTIGATOR_SA}" \
+    --set-env-vars "${INVESTIGATOR_ENV},A2A_SERVICE_ACCOUNT=${INVESTIGATOR_SA}" \
     --port 8080 \
     --cpu 2 \
     --memory 2Gi \

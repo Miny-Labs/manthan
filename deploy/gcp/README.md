@@ -55,8 +55,11 @@ Conventions used throughout (must match `secrets-bootstrap.sh` output):
 - Coral source secrets: `coral-{tenant}-{env-var-lowercased-hyphens}`
   (e.g. `STRIPE_API_KEY` → `coral-acme-stripe-api-key`)
 - Gemini key: `manthan-{tenant}-gemini-api-key` (env `GOOGLE_API_KEY`) —
-  attached as the AI Studio fallback; on GCP the services default to
-  Vertex AI under their own identity (`GEMINI_VERTEX=FALSE` to revert).
+  the AI Studio fallback. Triage/advisor/gateway/worker default to Vertex
+  AI under their own identity (`GEMINI_VERTEX=FALSE` to revert); the
+  investigator defaults to the key (`INVESTIGATOR_GEMINI_VERTEX=TRUE` to
+  flip) because preview-Pro burst quota on fresh projects is too small
+  for its call profile.
 - Platform secrets: `manthan-{tenant}-database-url`,
   `manthan-{tenant}-stripe-webhook-secret`, …
 - Models (Vertex AI, `GOOGLE_GENAI_USE_VERTEXAI=TRUE`,
