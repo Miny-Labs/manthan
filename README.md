@@ -28,7 +28,7 @@
   </tr>
   <tr>
     <td align="right"><strong>Refactored from</strong></td>
-    <td><a href="https://github.com/akash-mondal/manthan">akash-mondal/manthan</a> — the original pre-challenge agent (single hand-rolled loop), serving the demo above</td>
+    <td><a href="https://github.com/akash-mondal/manthan">akash-mondal/manthan</a> — the original pre-challenge agent</td>
   </tr>
 </table>
 </div>
