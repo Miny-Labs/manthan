@@ -24,7 +24,7 @@
   </tr>
   <tr>
     <td align="right"><strong>A2A</strong></td>
-    <td><a href="https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">advisor agent card</a> — callable by any agent, no SDK required</td>
+    <td>Agent cards: <a href="https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">advisor</a> · <a href="https://manthan-investigator-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">investigator</a> · <a href="https://manthan-triage-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">triage</a> — callable by any agent, no SDK required</td>
   </tr>
 </table>
 </div>
