@@ -54,10 +54,14 @@ Conventions used throughout (must match `secrets-bootstrap.sh` output):
 
 - Coral source secrets: `coral-{tenant}-{env-var-lowercased-hyphens}`
   (e.g. `STRIPE_API_KEY` → `coral-acme-stripe-api-key`)
-- Gemini key: `manthan-{tenant}-gemini-api-key` (env `GOOGLE_API_KEY`)
+- Gemini key: `manthan-{tenant}-gemini-api-key` (env `GOOGLE_API_KEY`) —
+  attached as the AI Studio fallback; on GCP the services default to
+  Vertex AI under their own identity (`GEMINI_VERTEX=FALSE` to revert).
 - Platform secrets: `manthan-{tenant}-database-url`,
   `manthan-{tenant}-stripe-webhook-secret`, …
-- Models (AI Studio, `GOOGLE_GENAI_USE_VERTEXAI=FALSE`):
+- Models (Vertex AI, `GOOGLE_GENAI_USE_VERTEXAI=TRUE`,
+  `GOOGLE_CLOUD_LOCATION=global` — preview Gemini models serve from the
+  global endpoint only):
   `gemini-3.1-pro-preview` / `gemini-3.5-flash` / `gemini-3.1-flash-lite`.
 
 ---
@@ -88,12 +92,14 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   sqladmin.googleapis.com \
   secretmanager.googleapis.com \
-  cloudtrace.googleapis.com
+  cloudtrace.googleapis.com \
+  aiplatform.googleapis.com
 ```
 
-Note: `aiplatform.googleapis.com` (Vertex) is **deliberately not needed**
-— Gemini is called through AI Studio (`generativelanguage.googleapis.com`)
-with a plain `GOOGLE_API_KEY`, which is not a GCP service API you enable.
+Gemini is served through Vertex AI: each agent service calls the model as
+its own service account, so grant `roles/aiplatform.user` to the four SAs
+created in step 2 (the deploy defaults to this; set `GEMINI_VERTEX=FALSE`
+to fall back to the AI Studio key instead).
 
 ## 2. Service accounts (per-agent Agent Identity)
 
@@ -123,6 +129,13 @@ for SA in manthan-runtime manthan-triage manthan-investigator manthan-advisor; d
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member "serviceAccount:${SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role roles/cloudtrace.agent
+done
+
+# Vertex AI: every agent calls Gemini as itself (no model API key at runtime)
+for SA in manthan-runtime manthan-triage manthan-investigator manthan-advisor; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member "serviceAccount:${SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role roles/aiplatform.user
 done
 ```
 
@@ -211,23 +224,26 @@ LISTEN/NOTIFY action queue) → builds the UI **with the api URL baked in**
 → deploys `manthan-ui` → points the api's `WEB_APP_ORIGIN` (CORS) at the
 UI URL.
 
-### Agent runtime choice: Agent Engine (preferred) vs Cloud Run (fallback)
+### Agent runtimes: Cloud Run + Vertex AI Agent Engine
 
-The investigator is a pure ADK agent system, which makes **Vertex AI
-Agent Engine the preferred runtime** for it (managed sessions, the
-console's Traces/Sessions/Memory tabs, Agent Registry residency):
+**The advisor runs on Agent Engine today.** The package in
+[`agent-engine/manthan_advisor/`](./agent-engine/manthan_advisor) is the
+advisory brain on Google's managed runtime; it holds no database
+credentials — every tool is a live A2A skill call into the Cloud Run
+mesh, the same surface any external agent uses:
 
 ```bash
-# from agent/ — requires GOOGLE_GENAI_USE_VERTEXAI=TRUE + a staging bucket
-pip install "google-cloud-aiplatform[adk,agent_engines]"
+pip install "google-cloud-aiplatform[agent_engines]"
 adk deploy agent_engine \
   --project "$PROJECT_ID" --region "$REGION" \
-  --staging_bucket "gs://${PROJECT_ID}-agent-staging" \
-  src/manthan_agent
+  --display_name "Manthan Advisor (Agent Engine)" \
+  deploy/gcp/agent-engine/manthan_advisor
 ```
 
-Two integration notes before flipping to it (why Cloud Run is the
-*working* path today and stays as the fallback):
+The investigator is also a pure ADK agent system and Agent Engine is its
+natural second home (managed sessions, the console's
+Traces/Sessions/Memory tabs). Two integration notes before flipping it
+(why Cloud Run is its *working* runtime today):
 
 1. **Coral transport** — on Agent Engine there is no sidecar process, so
    the stdio `coral mcp-stdio` subprocess must become a streamable-HTTP
@@ -238,8 +254,8 @@ Two integration notes before flipping to it (why Cloud Run is the
    public-IP Cloud SQL connector or a small ingest endpoint on
    `manthan-api`.
 
-Triage and advisor stay on Cloud Run either way — they are thin
-FastAPI/A2A surfaces, not ADK loops.
+Triage stays on Cloud Run either way — it is a thin FastAPI/A2A intake,
+not an ADK loop.
 
 ## 7. Configure the Stripe webhook
 

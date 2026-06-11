@@ -53,13 +53,18 @@ except ImportError:  # pragma: no cover - only on ADK versions without it
 
 
 def gemini_with_retry(model_name: str) -> Gemini:
-    """A Gemini model wrapped with retry/backoff for transient AI Studio 503s."""
+    """A Gemini model wrapped with retry/backoff for transient endpoint failures.
+
+    The budget is sized for Vertex Dynamic Shared Quota storms on preview
+    models (sustained 429s for a minute or more), not just one-off 503s:
+    ~4.5 minutes of backoff per call before giving up.
+    """
     return Gemini(
         model=model_name,
         retry_options=types.HttpRetryOptions(
-            attempts=6,
+            attempts=10,
             initial_delay=1.0,
-            max_delay=30.0,
+            max_delay=60.0,
             exp_base=2.0,
             http_status_codes=[429, 500, 502, 503, 504],
         ),

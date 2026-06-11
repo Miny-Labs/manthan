@@ -57,7 +57,7 @@ Manthan is that analyst, rebuilt as a team of agents that finishes in ~3 minutes
 | Mandate | Implementation | Where |
 |---|---|---|
 | **B2B focus** | Billing-dispute resolution for B2B SaaS merchants — chargebacks, refund demands, failed payments, fraud warnings | [Business case](#the-business-case) |
-| **Cloud-native runtime** | Six Cloud Run services + Cloud SQL + Secret Manager; Agent Engine documented for the investigator | [`deploy/gcp/`](./deploy/gcp) |
+| **Cloud-native runtime** | Six Cloud Run services + Cloud SQL + Secret Manager; the advisor also runs on Vertex AI Agent Engine | [`deploy/gcp/`](./deploy/gcp) |
 | **Gemini-powered intelligence** | All reasoning on Gemini: 3.1-pro (coordinator) · 3.5-flash (specialists, advisor) · 3.1-flash-lite (triage, prettifier) | [`agent/.../config.py`](./agent/src/manthan_agent/config.py) |
 | **A2A interoperability** | Three Agent Cards, JSON-RPC `/a2a`, triage→investigator over A2A, 12 skills for external agents | [`agent/.../a2a/`](./agent/src/manthan_agent/a2a) |
 | **Multi-agent ADK orchestration** | Coordinator + five parallel specialists (shared Evidence set); triage / investigator / advisor as identified macro agents | [`agent/.../team.py`](./agent/src/manthan_agent/team.py) |
@@ -279,7 +279,7 @@ Runbook, Dockerfiles, and scripts in [`deploy/gcp/`](./deploy/gcp):
 - **Cloud SQL Postgres** — five migrations via `sql-migrate.sh`.
 - **Secret Manager** — per-tenant `coral-{tenant}-{credential}` secrets, per-secret IAM, via `secrets-bootstrap.sh`.
 - **Cloud Trace** — OTel spans for every model call, tool call, and specialist.
-- **Vertex AI Agent Engine** — documented alternative host for the investigator (same ADK code, Vertex backend flag).
+- **Vertex AI Agent Engine** — the advisor runs there too ([`deploy/gcp/agent-engine/`](./deploy/gcp/agent-engine)): same ADK brain on Google's managed runtime, grounded through the live A2A mesh. The investigator's Agent Engine path is documented in the runbook.
 - **Coral sidecar** — Coral 0.4.2 over streamable-HTTP MCP in the cloud; local dev spawns `coral mcp-stdio` per investigation.
 
 ## How a case runs
@@ -301,7 +301,7 @@ Runbook, Dockerfiles, and scripts in [`deploy/gcp/`](./deploy/gcp):
 | Triage + prettifier | `gemini-3.1-flash-lite` |
 | Action execution (actor) | deterministic — no model |
 
-All Gemini via AI Studio (`GOOGLE_API_KEY`).
+On GCP all Gemini calls go through **Vertex AI** — each agent authenticates as its own service account (ADC), so no model API key exists in the runtime. Local dev falls back to an AI Studio `GOOGLE_API_KEY`.
 
 - **Agent** — [Google ADK](https://google.github.io/adk-docs/) 2.x: coordinator + five specialists as AgentTools over one Evidence set; coral tools (read) + `record_finding` / `ask_human` / `conclude` (coordinator-only); pacer as callbacks; OpenTelemetry throughout. Details: [`agent/README.md`](./agent/README.md).
 - **Backend** — FastAPI + asyncpg + PostgreSQL; three A2A agent services + two deterministic workers (`FOR UPDATE SKIP LOCKED`).
