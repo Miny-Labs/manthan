@@ -275,8 +275,10 @@ gcloud run services update manthan-api \
 
 # manthan-investigator — runs investigations IN-PROCESS as background
 # tasks after acking the A2A call, so:
-#   * --no-cpu-throttling : CPU stays allocated after the response
-#   * min-instances 1     : the instance must outlive the request
+#   * --no-cpu-throttling : CPU stays allocated after the response, so
+#     the instance outlives the A2A ack while the investigation runs
+#   * min-instances default 0 (budget profile); INVESTIGATOR_MIN_INSTANCES=1
+#     for always-warm production
 # NOTE: deployed unauthenticated for the hackathon demo (the A2A card is
 # public by design). For production flip to --no-allow-unauthenticated
 # and put ID-token auth on the triage->investigator hop.
