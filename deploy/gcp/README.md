@@ -368,9 +368,10 @@ cutover steps (handler, publisher, worker max-instances).
   verified against the real GitHub release.
 - **The `/webhooks/pubsub` handler does not exist yet** — `pubsub-setup.sh`
   is a template for the multi-instance upgrade path only.
-- **Agent Engine deployment** — documented in section 6 ("Agent runtime
-  choice") but not scripted; `deploy.sh` ships the Cloud Run fallback for
-  the investigator.
+- **Agent Engine deployment** — the advisor's package lives in
+  `agent-engine/manthan_advisor/` and deploys with one `adk deploy
+  agent_engine` command (section 6), separate from `deploy.sh`; the
+  investigator's Agent Engine path is documented but not scripted.
 - **A2A auth between the agents** — the three agent services deploy
   `--allow-unauthenticated` for the demo; production should flip triage→
   investigator (and gateway→agents) to ID-token auth between their

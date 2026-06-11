@@ -18,10 +18,10 @@
 # account (created in README step 2; secret access granted per-secret in
 # step 5). The identity is stamped into each card via A2A_SERVICE_ACCOUNT.
 #
-# Agent Engine note: the investigator is the one service that benefits from
-# Vertex AI Agent Engine (`adk deploy agent_engine`) — see README "Agent
-# runtime choice". This script deploys the Cloud Run fallback, which is the
-# fully-working path today.
+# Agent Engine note: the advisor also runs on Vertex AI Agent Engine —
+# deployed separately from deploy/gcp/agent-engine/ (see README "Agent
+# runtimes"). This script deploys the Cloud Run mesh, which is the
+# system of record; the investigator's Agent Engine path is documented.
 #
 # Prerequisites (see deploy/gcp/README.md for the full runbook):
 #   * APIs enabled: run, cloudbuild, artifactregistry, sqladmin,

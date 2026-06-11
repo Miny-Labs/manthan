@@ -251,8 +251,13 @@ async def agent_card(request: Request) -> dict[str, Any]:
     )
     # Advisor skills + the 6 read skills (no investigate_dispute - that's
     # the investigator's job; the card keeps each agent's mandate narrow).
+    # The shared query list also carries ask/precheck/history/exposure -
+    # ADVISOR_SKILLS owns those entries, so drop them from the merge.
+    advisor_ids = {s["id"] for s in ADVISOR_SKILLS}
     card["skills"] = ADVISOR_SKILLS + [
-        s for s in card["skills"] if s["id"] in QUERY_SKILL_IDS
+        s
+        for s in card["skills"]
+        if s["id"] in QUERY_SKILL_IDS and s["id"] not in advisor_ids
     ]
     return card
 
