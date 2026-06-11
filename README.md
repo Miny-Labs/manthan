@@ -10,10 +10,24 @@
   <strong>Track 3 submission · Google for Startups AI Agents Challenge</strong>
   <br />
   <em>Refactor for Google Cloud Marketplace & Gemini Enterprise</em>
-  <br /><br />
-  <a href="https://manthan-ui-dzv6bwbpba-uc.a.run.app"><strong>Live app</strong></a> ·
-  <a href="https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json"><strong>Live agent card</strong></a>
 </p>
+
+<div align="center">
+<table>
+  <tr>
+    <td align="right"><strong>Live demo</strong></td>
+    <td><a href="https://manthan.quest"><strong>manthan.quest</strong></a> — sign in and click through ready-made dispute flows</td>
+  </tr>
+  <tr>
+    <td align="right"><strong>Prototype</strong></td>
+    <td><a href="https://manthan-ui-dzv6bwbpba-uc.a.run.app">manthan-ui-dzv6bwbpba-uc.a.run.app</a> — the Cloud Run deployment this README describes</td>
+  </tr>
+  <tr>
+    <td align="right"><strong>A2A</strong></td>
+    <td><a href="https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json">advisor agent card</a> — callable by any agent, no SDK required</td>
+  </tr>
+</table>
+</div>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Gemini-3.1_Pro_·_3.5_Flash_·_3.1_Lite-4285F4?logo=googlegemini&logoColor=white" alt="Gemini">
