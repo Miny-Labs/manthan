@@ -334,7 +334,7 @@ On GCP the triage, advisor, gateway and worker services call Gemini through **Ve
 
 ## License
 
-Apache 2.0 — see [`LICENSE`](./LICENSE). A hosted version runs at [manthan.quest](https://manthan.quest), maintained in a separate production repository.
+Apache 2.0 — see [`LICENSE`](./LICENSE). This Track 3 submission is a refactor of the original Manthan agent, [akash-mondal/manthan](https://github.com/akash-mondal/manthan), which still runs the hosted demo at [manthan.quest](https://manthan.quest).
 
 ---
 
