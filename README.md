@@ -10,6 +10,9 @@
   <strong>Track 3 submission · Google for Startups AI Agents Challenge</strong>
   <br />
   <em>Refactor for Google Cloud Marketplace & Gemini Enterprise</em>
+  <br /><br />
+  <a href="https://manthan-ui-dzv6bwbpba-uc.a.run.app"><strong>Live app</strong></a> ·
+  <a href="https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json"><strong>Live agent card</strong></a>
 </p>
 
 <p align="center">
@@ -210,8 +213,8 @@ Three Agent Cards (`/.well-known/agent-card.json` per service), JSON-RPC at `/a2
 | **Read** | `get_case` · `list_cases` · `get_brief` · `get_findings` · `get_actions` · `get_audit_trail` | Every case artifact — state is never locked in the UI |
 
 ```sh
-curl -s https://<advisor-url>/.well-known/agent-card.json
-curl -s -X POST https://<advisor-url>/a2a -H 'content-type: application/json' -d '{
+curl -s https://manthan-advisor-dzv6bwbpba-uc.a.run.app/.well-known/agent-card.json
+curl -s -X POST https://manthan-advisor-dzv6bwbpba-uc.a.run.app/a2a -H 'content-type: application/json' -d '{
   "jsonrpc": "2.0", "id": 1, "method": "message/send",
   "params": {"skill": "precheck_refund",
              "args": {"customer_ref": "billing@aperture-analytics.co", "amount_minor": 84000}}}'

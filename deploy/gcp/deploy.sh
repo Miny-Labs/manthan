@@ -115,7 +115,10 @@ build_image() {
     shift 3
     local tmpdir cfg
     tmpdir="${TMPDIR:-/tmp}"
-    cfg="$(mktemp "$tmpdir/cloudbuild.XXXXXX.yaml")"
+    # BSD/macOS mktemp requires trailing Xs — create then rename to .yaml.
+    cfg="$(mktemp "$tmpdir/cloudbuild.XXXXXX")"
+    mv "$cfg" "${cfg}.yaml"
+    cfg="${cfg}.yaml"
     {
         echo "steps:"
         echo "- name: gcr.io/cloud-builders/docker"
@@ -269,8 +272,8 @@ gcloud run deploy manthan-investigator \
     --project "$PROJECT_ID" \
     --region "$REGION" \
     --image "$API_IMAGE" \
-    --command "uvicorn" \
-    --args "manthan_api.agents.investigator:app,--host,0.0.0.0,--port,8080" \
+    --command "/bin/bash" \
+    --args "-c,/usr/local/bin/coral-bootstrap.sh; exec uvicorn manthan_api.agents.investigator:app --host 0.0.0.0 --port 8080" \
     --service-account "$INVESTIGATOR_SA" \
     --add-cloudsql-instances "$SQL_CONN" \
     --set-secrets "$SET_SECRETS" \
@@ -278,7 +281,7 @@ gcloud run deploy manthan-investigator \
     --port 8080 \
     --cpu 2 \
     --memory 2Gi \
-    --min-instances 1 \
+    --min-instances "${INVESTIGATOR_MIN_INSTANCES:-0}" \
     --max-instances 2 \
     --concurrency 10 \
     --timeout 600 \
@@ -366,9 +369,11 @@ gcloud run services update manthan-api \
 # is retired — investigations run inside manthan-investigator above.
 # * --no-cpu-throttling: the actor does background writes outside of
 #   request handling; CPU must stay allocated between requests.
-# * min=max=1 instance: the actor's queue is single-instance PG
-#   LISTEN/NOTIFY. Run ./pubsub-setup.sh and re-deploy with more
-#   instances only after switching the bus to Pub/Sub.
+# * max 1 instance: the actor's queue is single-instance PG polling.
+#   Run ./pubsub-setup.sh and re-deploy with more instances only after
+#   switching the bus to Pub/Sub. Default min 0 = budget profile (see
+#   the Cloud Scheduler wake-ping below); WORKER_MIN_INSTANCES=1 for
+#   always-on production.
 
 echo "==> deploying manthan-worker"
 gcloud run deploy manthan-worker \
@@ -383,10 +388,34 @@ gcloud run deploy manthan-worker \
     --port 8080 \
     --cpu 2 \
     --memory 2Gi \
-    --min-instances 1 \
+    --min-instances "${WORKER_MIN_INSTANCES:-0}" \
     --max-instances 1 \
     --no-cpu-throttling \
     --no-allow-unauthenticated
+
+# Budget profile (WORKER_MIN_INSTANCES=0, the default): the actor polls
+# Postgres, so a scaled-to-zero worker needs a wake signal. A Cloud
+# Scheduler ping every 5 minutes wakes it; instance billing means you pay
+# for minutes of actual wakefulness instead of an always-on instance
+# (~$30/mo -> <$1/mo). Set WORKER_MIN_INSTANCES=1 for production tenants.
+if [ "${WORKER_MIN_INSTANCES:-0}" = "0" ]; then
+    echo "==> budget profile: Cloud Scheduler wake-ping for manthan-worker"
+    gcloud services enable cloudscheduler.googleapis.com --project "$PROJECT_ID"
+    WORKER_URL="$(gcloud run services describe manthan-worker \
+        --project "$PROJECT_ID" --region "$REGION" \
+        --format 'value(status.url)')"
+    gcloud run services add-iam-policy-binding manthan-worker \
+        --project "$PROJECT_ID" --region "$REGION" \
+        --member "serviceAccount:${SERVICE_ACCOUNT}" \
+        --role roles/run.invoker --quiet
+    gcloud scheduler jobs create http manthan-worker-wake \
+        --project "$PROJECT_ID" --location "$REGION" \
+        --schedule "*/5 * * * *" \
+        --uri "${WORKER_URL}/healthz" \
+        --http-method GET \
+        --oidc-service-account-email "$SERVICE_ACCOUNT" \
+        --quiet 2>/dev/null || echo "    (scheduler job exists)"
+fi
 
 # ── 5. Build + deploy manthan-ui ───────────────────────────────────────
 # Built AFTER the API so the API URL can be baked into the bundle
