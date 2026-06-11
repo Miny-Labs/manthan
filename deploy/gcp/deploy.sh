@@ -217,7 +217,12 @@ for pair in \
     fi
 done
 
-COMMON_ENV="GOOGLE_GENAI_USE_VERTEXAI=FALSE,CORAL_BINARY=/usr/local/bin/coral"
+# Gemini auth: Vertex AI via each service's own identity (ADC). Preview
+# Gemini models are served from the global endpoint only, hence
+# GOOGLE_CLOUD_LOCATION=global. Set GEMINI_VERTEX=FALSE to fall back to
+# the AI Studio key (GOOGLE_API_KEY secret, attached above either way).
+GEMINI_VERTEX="${GEMINI_VERTEX:-TRUE}"
+COMMON_ENV="GOOGLE_GENAI_USE_VERTEXAI=${GEMINI_VERTEX},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,CORAL_BINARY=/usr/local/bin/coral"
 
 # ── 2. Build the API/worker image ─────────────────────────────────────
 
